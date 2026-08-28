@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 22 end-to-end validation of (1) self-workspace task creation, (2) reassignment via Pindahkan, (3) Head Divisi read-only monitoring, (4) Head set/unset from Manajemen User, (5) notification bell feed, (6) task Comments & Activity. Backend: new pytest suite /app/backend/tests/test_iter22_self_task_head_notif.py — 30/30 PASSED (me/scope for SPV+Head, create_task forcing divisi/penerima/pemberi=self incl. list fallback to own divisi, head create in own divisi, move to other divisi+penerima with move activity log, activity create/status/comment logging + 404/401 cases, notifications feed shape for SPV/head + overdue task appearing as urgensi=overdue, divisi head set/unset persistence + cross-divisi 400 + non-SPV 403 + unknown divisi 404, head-scoped monitoring (deadline-radar 200 and cannot override divisi_id param, amaliyah-compliance 403 for head / 200 for SPV, workload|stagnation|divisi-progress|workload-heatmap|per-anggota 200), and head read-only enforcement: PUT/DELETE/comment/move on another member's task in the head's own divisi all return 403 and the task status stays unchanged. Frontend (Playwright, desktop 1920 + mobile 390): SPV create-task on the Operasional board correctly hides the penerima picker, shows create-self-note, creates the task in Marketing/Budi and auto-switches the board to Marketing where the card is visible; ActivityPanel shows 'create' entry, comment posts and appears, status change logs 'Status diubah menjadi DALAM_PROSES'; Pindahkan dialog moves the task to Operasional and reassigns to Siti Aminah (delegasi badge appears); bell shows Reminder Deadline (Overdue) for an overdue task, and as Siti shows the delegated item with 'Tandai delegasi dibaca' which clears it; /users Aktif tab head-toggle set/unset persists across reloads; Siti's sidebar shows only Beranda/Tugas/Rutin/Spiritual/Monitoring Tim (no Raport/Strategi/Manajemen User), /monitoring renders 'Monitoring Tim (Head Divisi)' + badge 'Divisi: Operasional', tab-compliance hidden, divisi selector locked, all remaining tabs render scoped to Operasional only (per-anggota options = ['Siti Aminah'], heatmap/progres show only Operasional), and /strategy /raport /users all redirect to /. All test data created during testing was deleted; demo state (SPV<->Budi link, Siti head of Operasional, tasks 'cdcscdscd' & 'ghuhuh') verified intact.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/tasks/{id} and /api/tasks/bulk-delete", "issue": "task_activity documents are never deleted when a task is deleted (41 orphan activity docs currently in DB). Add a cascade delete_many({'task_id': ...}) (and for bulk delete) to avoid unbounded orphan growth."},
+      {"endpoint": "POST /api/tasks/{id}/move", "issue": "Moving a task to another divisi without supplying penerima_tugas_id keeps the old penerima, producing cross-divisi inconsistency (a Marketing anggota shown as penerima of an Operasional task; workload/per-anggota aggregations then mis-attribute it). Consider clearing or requiring penerima when divisi_id changes."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Monitoring.jsx > DeadlineRadar (head mode)", "issue": "Head monitoring is documented as read-only, but the deadline cards still render the mutation actions 'Selesai', '+3 hari', '+7 hari'. For a task belonging to another member the click fails with backend 403 and a red toast 'Gagal update task' (reproduced with a task of Budi moved into Operasional). Hide these actions when user.is_head && !is_spv (or only render them for tasks where the head is the penerima).", "selector": "[data-testid=\"action-selesai\"], [data-testid=\"action-bump-3\"], [data-testid=\"action-bump-7\"]", "priority": "HIGH"},
+      {"component": "AppShell.jsx / NotificationBell", "issue": "NotificationBell is rendered twice (mobile header line 139 + desktop header line 164), so data-testid notif-bell / notif-badge / notif-panel each resolve to 2 elements and the first one is hidden — naive Playwright clicks time out. Suffix the testids (notif-bell-mobile / notif-bell-desktop) or render a single instance.", "selector": "[data-testid=\"notif-bell\"]", "priority": "MEDIUM"},
+      {"component": "tasks/dialogs.jsx MoveDialog", "issue": "Penerima defaults to '— Tetap (tidak berubah) —' even after changing divisi, so a move can land a task in another divisi while keeping the previous divisi's anggota as penerima (card then shows 'Budi Santoso' on the Operasional board). Auto-reset/force penerima selection when divisi changes.", "selector": "[data-testid=\"move-select-penerima\"]", "priority": "MEDIUM"},
+      {"component": "tasks/KanbanBoard.jsx Card", "issue": "Task cards are not clickable to open the edit dialog — the only path is the hover-only kebab (card-menu-<id>) → 'Ubah'. On touch devices the kebab is opacity-0 until group-hover, so opening a task (and thus Comments/Activity) is hard to discover. Add onClick={() => onEdit(task)} on the card body (with pointer-down stop on interactive children).", "selector": "[data-testid^=\"task-card-\"]", "priority": "MEDIUM"},
+      {"component": "UsersManagement.jsx", "issue": "The page defaults to the 'Menunggu' tab; with 0 pending users it shows 'Tidak ada user pada kategori ini.' so the head-toggle / user list appears missing until the user finds the 'Aktif' tab. Default to 'approved' when counts.pending === 0.", "selector": "[data-testid=\"tab-pending\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Tugas > Tugas Baru dialog (mobile 390px)", "issues": ["The 'Pemberi Tugas / Penerima Tugas' row stays grid-cols-2 at 390px, squeezing create-self-note into a 164px-wide, 7-line block. Use grid-cols-1 sm:grid-cols-2.", "Tanggal Mulai / Deadline still use native <input type=\"date\"> (mm/dd/yyyy) instead of the shadcn Calendar used elsewhere."]},
+      {"screen": "Monitoring Tim (head, mobile 390px)", "issues": ["No horizontal overflow (scrollWidth == 390) — layout OK. Tab strip wraps to 2 rows which is acceptable."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter22_self_task_head_notif.py",
+    "/app/test_reports/pytest/iter22_results.xml"
+  ],
+  "action_items": [
+    "Hide (or gate on ownership) the Selesai/+3/+7 action buttons in Monitoring Deadline Radar for Head users — currently they 403 with 'Gagal update task'.",
+    "De-duplicate NotificationBell data-testids (two rendered instances break automated clicks).",
+    "MoveDialog: reset/require penerima when divisi changes so a task cannot keep a penerima from another divisi.",
+    "Make Kanban task cards clickable to open the edit dialog (Comments/Activity currently reachable only through the hover-only kebab menu).",
+    "Cascade-delete task_activity when a task (or bulk of tasks) is deleted — 41 orphan docs already exist.",
+    "Minor: default Manajemen User to the 'Aktif' tab when there are no pending users; make the create-dialog penerima/pemberi grid single-column on mobile."
+  ],
+  "critical_code_review_comments": [
+    "backend/server.py is 1789 lines and now mixes tasks, scope, notifications, activity, divisi and lists routes — split into routers (tasks.py, notifications.py, divisi.py) as done for monitoring/strategy.",
+    "GET /api/tasks/{task_id} has no auth/scope check (no _assert_task_access, no Depends(get_current_user) beyond the global middleware), so any authenticated user can read any task by id, bypassing the divisi scoping enforced everywhere else.",
+    "notifications_feed does up to 5 sequential Mongo queries and loads all anggota+divisi on every poll; cache the maps or use an aggregation if polling is frequent.",
+    "PUT /api/divisi/{id}/head does not clear a previous head assignment of the same anggota in another divisi — currently harmless because the anggota must belong to the divisi, but add a defensive $unset for other divisi to guarantee 'one head per person'.",
+    "_log_activity swallows nothing but is fire-and-forget inside the request path; consider guarding failures so a logging error cannot 500 a successful task mutation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter22_self_task_head_notif.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "92%"},
+  "seed_data_creation": "Temporary tasks created and deleted during testing: 'QA22 Tugas Self Workspace' (UI, SPV), 'QA22 Head Task' (UI, Siti), TEST_ITER22_* (pytest + helper scripts, incl. TEST_ITER22_headro_ui and TEST_ITER22_delegasi). All removed — DB now contains only the pre-existing tasks 'cdcscdscd' and 'ghuhuh'. Divisi head state restored: Marketing head_anggota_id=None, Operasional head_anggota_id=Siti Aminah. SPV<->Budi link untouched.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "SPV akunsaktibanget06@gmail.com / Qolbu2026! and Head siti@test.com / Head2026! — both work (session_token via Bearer or cookie).",
+  "context_for_next_testing_agent": "Regression suite for this round: /app/backend/tests/test_iter22_self_task_head_notif.py (30 tests, module-scoped logins for SPV+Head, self-cleaning tasks). Notes for UI automation: (a) data-testid notif-bell/notif-badge/notif-panel resolve to 2 elements — use ':visible' or .first on the visible one; (b) Kanban cards do not open on click — use hover + [data-testid=card-menu-<id>] then the 'Ubah' / 'Pindahkan Tugas' / 'Hapus' menuitem; (c) /users opens on the empty 'Menunggu' tab — click [data-testid=tab-approved] before looking for head-toggle-<user_id>; (d) DB normally has only 2 tasks so monitoring views are empty — seed tasks (create as SPV then POST /tasks/{id}/move with divisi_id) and delete afterwards. Open items are all frontend polish + the head read-only action-button leak; no backend endpoint failures were found.",
+  "rca_of_the_issue": "Head read-only leak RCA: Monitoring.jsx passes isHead only to hide the compliance tab and lock the divisi selector, but DeadlineTaskCard always renders markSelesai/bumpDeadline buttons. The backend correctly rejects those mutations via _assert_task_access (non-SPV requires penerima/pemberi match, or rutin task in own divisi), returning 403 'Tugas ini bukan bagian dari workspace Anda.' — verified that status remains BELUM_MULAI after the head's click. So this is purely a frontend affordance bug: the actions should be conditioned on (!isHead || task.penerima_tugas_id === user.anggota_id)."
+}

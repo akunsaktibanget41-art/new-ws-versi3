@@ -76,14 +76,15 @@ export default function StrategyOverview({ periodId, period }) {
       {/* FLOW / PANDUAN */}
       <div className="rounded-2xl border border-emerald-100 bg-white p-6">
         <p className="text-xs font-semibold uppercase tracking-wider text-emerald-800/70">Alur Eksekusi Strategi (BSC × OKR)</p>
-        <div className="mt-3 grid gap-2 md:grid-cols-6">
+        <div className="mt-3 grid gap-2 md:grid-cols-4 lg:grid-cols-7">
           {[
             { label: "Visi & Misi", desc: "Jangkar strategi", tone: "amber" },
-            { label: "BSC", desc: "Target tahunan 4 aspek", tone: "emerald" },
-            { label: "OKR", desc: "Objective quarterly (linked to BSC)", tone: "emerald" },
+            { label: "BSC", desc: "Sasaran 4 aspek", tone: "emerald" },
+            { label: "OKR", desc: "Objective + KR (linked BSC)", tone: "emerald" },
             { label: "KPI", desc: "Indikator individu", tone: "emerald" },
             { label: "Action Plan", desc: "Proyek → tasks", tone: "emerald" },
             { label: "Komitmen", desc: "Surat kesepakatan PDF", tone: "gold" },
+            { label: "Evaluasi", desc: "Rekap raker + PDF", tone: "gold" },
           ].map((s, i, arr) => (
             <div key={s.label} className="flex flex-col">
               <div className={`rounded-lg border p-3 ${s.tone === "amber" ? "border-amber-200 bg-amber-50/60" : s.tone === "gold" ? "border-amber-200 bg-amber-50/60" : "border-emerald-200 bg-emerald-50/60"}`}>

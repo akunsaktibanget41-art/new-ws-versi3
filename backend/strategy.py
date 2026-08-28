@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict
 
 from komitmen_pdf import build_komitmen_pdf
+from evaluasi_pdf import build_evaluasi_pdf
 
 
 def _now() -> str:
@@ -43,20 +44,24 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         siklus_bulan: Optional[int] = None
         active: Optional[bool] = None
 
+    class BscIndikator(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        id: Optional[str] = None
+        nama: str = ""
+        target: str = ""
+        realisasi: str = ""
+
     class BscCreate(BaseModel):
         period_id: str
         aspek: str  # FINANCIAL | CUSTOMER | INTERNAL | LEARNING
-        nama: str
-        target: str = ""
-        achieved: str = ""
+        judul: str = ""
+        indikators: List[BscIndikator] = Field(default_factory=list)
         urutan: int = 0
 
     class BscUpdate(BaseModel):
         model_config = ConfigDict(extra="ignore")
-        aspek: Optional[str] = None
-        nama: Optional[str] = None
-        target: Optional[str] = None
-        achieved: Optional[str] = None
+        judul: Optional[str] = None
+        indikators: Optional[List[BscIndikator]] = None
         urutan: Optional[int] = None
 
     class OkrCreate(BaseModel):
@@ -64,9 +69,10 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         level: str = "DIVISI"  # COMPANY | DIVISI | INDIVIDU
         divisi_id: Optional[str] = None
         owner_id: Optional[str] = None  # anggota_id (dynamic — SPV picks who holds this OKR)
+        owner_jabatan: Optional[str] = None  # free-text job title assigned to the owner
         supporter_ids: List[str] = Field(default_factory=list)
         objective: str
-        bsc_target_id: Optional[str] = None  # link to BSC strategic target (BSC → OKR alignment)
+        bsc_target_id: Optional[str] = None  # link to BSC goal (BSC → OKR alignment)
         urutan: int = 0
 
     class OkrUpdate(BaseModel):
@@ -74,6 +80,7 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         level: Optional[str] = None
         divisi_id: Optional[str] = None
         owner_id: Optional[str] = None
+        owner_jabatan: Optional[str] = None
         supporter_ids: Optional[List[str]] = None
         objective: Optional[str] = None
         bsc_target_id: Optional[str] = None
@@ -81,16 +88,35 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
 
     class KrCreate(BaseModel):
         nama: str
+        polaritas: str = "MAX"  # MAX (lebih tinggi lebih baik) | MIN (lebih rendah lebih baik)
+        baseline: str = ""  # optional starting point
         target: str = ""
-        actual: str = ""
+        actual: str = ""  # realisasi
         urutan: int = 0
 
     class KrUpdate(BaseModel):
         model_config = ConfigDict(extra="ignore")
         nama: Optional[str] = None
+        polaritas: Optional[str] = None
+        baseline: Optional[str] = None
         target: Optional[str] = None
         actual: Optional[str] = None
         urutan: Optional[int] = None
+
+    class InitiativeCreate(BaseModel):
+        nama: str
+        kr_id: Optional[str] = None
+        pic_id: Optional[str] = None  # anggota_id
+        deadline: Optional[str] = None  # YYYY-MM-DD
+        status: str = "BELUM"  # BELUM | SELESAI
+
+    class InitiativeUpdate(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        nama: Optional[str] = None
+        kr_id: Optional[str] = None
+        pic_id: Optional[str] = None
+        deadline: Optional[str] = None
+        status: Optional[str] = None
 
     class KpiCreate(BaseModel):
         period_id: str
@@ -165,6 +191,53 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
             status = "OFF_TRACK"
         return weighted, status
 
+    def _kr_pct(kr: dict) -> Optional[float]:
+        """KR achievement % respecting polaritas + optional baseline. Returns None if not measurable."""
+        try:
+            tgt = float(kr.get("target") or 0)
+        except (TypeError, ValueError):
+            return None
+        try:
+            act = float(kr.get("actual") or 0)
+        except (TypeError, ValueError):
+            act = 0.0
+        base = None
+        try:
+            if kr.get("baseline") not in (None, ""):
+                base = float(kr.get("baseline"))
+        except (TypeError, ValueError):
+            base = None
+        pol = (kr.get("polaritas") or "MAX").upper()
+        if pol == "MIN":
+            if base is not None and base != tgt:
+                pct = (base - act) / (base - tgt) * 100
+            elif act > 0:
+                pct = (tgt / act) * 100
+            else:
+                pct = 100.0 if tgt == 0 else 0.0
+        else:  # MAX
+            if base is not None and (tgt - base) != 0:
+                pct = (act - base) / (tgt - base) * 100
+            elif tgt > 0:
+                pct = (act / tgt) * 100
+            elif tgt == 0 and act == 0:
+                return None
+            else:
+                pct = 0.0
+        return round(max(0.0, min(200.0, pct)), 1)
+
+    def _okr_progress(kr_list: list) -> float:
+        pcts = [p for p in (_kr_pct(kr) for kr in kr_list) if p is not None]
+        return round(sum(pcts) / len(pcts), 1) if pcts else 0.0
+
+    def _okr_label(pct: float) -> str:
+        """<51 OFF_TRACK (red) · 51–70 NEED_IMPROVEMENT (yellow) · >=71 ON_TRACK (green)."""
+        if pct < 51:
+            return "OFF_TRACK"
+        if pct <= 70:
+            return "NEED_IMPROVEMENT"
+        return "ON_TRACK"
+
     async def _my_anggota_id(user: dict) -> Optional[str]:
         """Return the anggota_id linked to the current user, or None if unlinked.
 
@@ -223,9 +296,11 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         r = await db.strategy_periods.delete_one({"id": pid})
         # Cascade cleanup
         await db.bsc_targets.delete_many({"period_id": pid})
+        await db.bsc_goals.delete_many({"period_id": pid})
         objs = await db.okr_objectives.find({"period_id": pid}, {"id": 1}).to_list(500)
         oids = [o["id"] for o in objs]
         await db.okr_keyresults.delete_many({"objective_id": {"$in": oids}})
+        await db.okr_initiatives.delete_many({"objective_id": {"$in": oids}})
         await db.okr_objectives.delete_many({"period_id": pid})
         await db.kpi_items.delete_many({"period_id": pid})
         await db.strategy_projects.delete_many({"period_id": pid})
@@ -243,11 +318,11 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         return {"ok": True}
 
     # ================================================================
-    # BSC
+    # BSC — Goals per aspek, each with embedded KPI indicators
     # ================================================================
     @router.get("/bsc")
     async def list_bsc(period_id: str, _: dict = Depends(get_current_user)):
-        rows = await db.bsc_targets.find({"period_id": period_id}, {"_id": 0}).sort([("aspek", 1), ("urutan", 1)]).to_list(500)
+        rows = await db.bsc_goals.find({"period_id": period_id}, {"_id": 0}).sort([("aspek", 1), ("urutan", 1)]).to_list(500)
         return rows
 
     @router.post("/bsc")
@@ -255,21 +330,28 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         data = payload.model_dump()
         data["id"] = str(uuid.uuid4())
         data["created_at"] = _now()
-        await db.bsc_targets.insert_one(data)
+        for ind in data.get("indikators") or []:
+            if not ind.get("id"):
+                ind["id"] = str(uuid.uuid4())
+        await db.bsc_goals.insert_one(data)
         data.pop("_id", None)
         return data
 
     @router.put("/bsc/{bid}")
     async def update_bsc(bid: str, payload: BscUpdate, _: dict = Depends(require_spv)):
         update = payload.model_dump(exclude_unset=True)
-        r = await db.bsc_targets.find_one_and_update({"id": bid}, {"$set": update}, return_document=True, projection={"_id": 0})
+        if "indikators" in update:
+            for ind in update["indikators"] or []:
+                if not ind.get("id"):
+                    ind["id"] = str(uuid.uuid4())
+        r = await db.bsc_goals.find_one_and_update({"id": bid}, {"$set": update}, return_document=True, projection={"_id": 0})
         if not r:
-            raise HTTPException(404, "BSC target tidak ditemukan.")
+            raise HTTPException(404, "Goal BSC tidak ditemukan.")
         return r
 
     @router.delete("/bsc/{bid}")
     async def delete_bsc(bid: str, _: dict = Depends(require_spv)):
-        r = await db.bsc_targets.delete_one({"id": bid})
+        r = await db.bsc_goals.delete_one({"id": bid})
         return {"ok": True, "deleted": r.deleted_count}
 
     # ================================================================
@@ -286,42 +368,41 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         by_obj: dict = {}
         for k in krs:
             by_obj.setdefault(k["objective_id"], []).append(k)
+        inits = await db.okr_initiatives.find({"objective_id": {"$in": oids}}, {"_id": 0}).sort("created_at", 1).to_list(2000)
+        init_by_obj: dict = {}
+        for it in inits:
+            init_by_obj.setdefault(it["objective_id"], []).append(it)
         ang_map = await _decorate_anggota_map()
         div_map = await _decorate_divisi_map()
-        # BSC map (for link decoration)
+        # BSC goal map (for link decoration)
         bsc_ids = list({o.get("bsc_target_id") for o in objs if o.get("bsc_target_id")})
         bsc_map = {}
         if bsc_ids:
-            bsc_rows = await db.bsc_targets.find({"id": {"$in": bsc_ids}}, {"_id": 0}).to_list(500)
-            bsc_map = {b["id"]: b for b in bsc_rows}
+            bsc_rows = await db.bsc_goals.find({"id": {"$in": bsc_ids}}, {"_id": 0}).to_list(500)
+            bsc_map = {b["id"]: {"id": b["id"], "aspek": b.get("aspek"), "nama": b.get("judul", "")} for b in bsc_rows}
         result = []
         for o in objs:
-            kr_list = by_obj.get(o["id"], [])
-            # progress % = avg of KR achievement pct (only if target numeric)
-            pcts = []
-            for kr in kr_list:
-                try:
-                    tgt = float(kr.get("target") or 0)
-                    act = float(kr.get("actual") or 0)
-                    if tgt > 0:
-                        pcts.append(min(200, (act / tgt) * 100))
-                    elif tgt == 0 and act == 0:
-                        pcts.append(0)
-                except (TypeError, ValueError):
-                    pass
-            progress = round(sum(pcts) / len(pcts), 1) if pcts else 0.0
+            kr_raw = by_obj.get(o["id"], [])
+            kr_list = [{**kr, "pct": _kr_pct(kr)} for kr in kr_raw]
+            progress = _okr_progress(kr_raw)
             owner = ang_map.get(o.get("owner_id")) if o.get("owner_id") else None
             supporters = [ang_map[i] for i in (o.get("supporter_ids") or []) if i in ang_map]
             divisi = div_map.get(o.get("divisi_id")) if o.get("divisi_id") else None
             bsc = bsc_map.get(o.get("bsc_target_id")) if o.get("bsc_target_id") else None
+            initiatives = []
+            for it in init_by_obj.get(o["id"], []):
+                pic = ang_map.get(it.get("pic_id")) if it.get("pic_id") else None
+                initiatives.append({**it, "pic": {"id": pic["id"], "nama": pic["nama"]} if pic else None})
             result.append({
                 **o,
                 "key_results": kr_list,
                 "progress": progress,
+                "label": _okr_label(progress),
                 "owner": owner,
                 "supporters": supporters,
                 "divisi": divisi,
                 "bsc_target": bsc,
+                "initiatives": initiatives,
             })
         return result
 
@@ -355,6 +436,7 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
     @router.delete("/okr/{oid}")
     async def delete_okr(oid: str, _: dict = Depends(require_spv)):
         await db.okr_keyresults.delete_many({"objective_id": oid})
+        await db.okr_initiatives.delete_many({"objective_id": oid})
         r = await db.okr_objectives.delete_one({"id": oid})
         return {"ok": True, "deleted": r.deleted_count}
 
@@ -396,6 +478,46 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
     @router.delete("/okr/{oid}/keyresults/{kid}")
     async def delete_kr(oid: str, kid: str, _: dict = Depends(require_spv)):
         r = await db.okr_keyresults.delete_one({"id": kid, "objective_id": oid})
+        # Detach initiatives linked to this KR
+        await db.okr_initiatives.update_many({"objective_id": oid, "kr_id": kid}, {"$set": {"kr_id": None}})
+        return {"ok": True, "deleted": r.deleted_count}
+
+    # ---- Initiatives (sub-items under an OKR, optionally tied to a KR) ----
+    async def _can_manage_okr(oid: str, user: dict) -> dict:
+        obj = await db.okr_objectives.find_one({"id": oid}, {"_id": 0})
+        if not obj:
+            raise HTTPException(404, "Objective tidak ditemukan.")
+        scope = await user_scope(user)
+        if not scope["is_spv"]:
+            my_id = await _my_anggota_id(user)
+            if my_id is None or (obj.get("owner_id") != my_id and my_id not in (obj.get("supporter_ids") or [])):
+                raise HTTPException(403, "Hanya SPV, owner atau supporter yang bisa mengubah initiative.")
+        return obj
+
+    @router.post("/okr/{oid}/initiatives")
+    async def add_initiative(oid: str, payload: InitiativeCreate, user: dict = Depends(get_current_user)):
+        await _can_manage_okr(oid, user)
+        data = payload.model_dump()
+        data["id"] = str(uuid.uuid4())
+        data["objective_id"] = oid
+        data["created_at"] = _now()
+        await db.okr_initiatives.insert_one(data)
+        data.pop("_id", None)
+        return data
+
+    @router.put("/okr/{oid}/initiatives/{iid}")
+    async def update_initiative(oid: str, iid: str, payload: InitiativeUpdate, user: dict = Depends(get_current_user)):
+        await _can_manage_okr(oid, user)
+        update = payload.model_dump(exclude_unset=True)
+        r = await db.okr_initiatives.find_one_and_update({"id": iid, "objective_id": oid}, {"$set": update}, return_document=True, projection={"_id": 0})
+        if not r:
+            raise HTTPException(404, "Initiative tidak ditemukan.")
+        return r
+
+    @router.delete("/okr/{oid}/initiatives/{iid}")
+    async def delete_initiative(oid: str, iid: str, user: dict = Depends(get_current_user)):
+        await _can_manage_okr(oid, user)
+        r = await db.okr_initiatives.delete_one({"id": iid, "objective_id": oid})
         return {"ok": True, "deleted": r.deleted_count}
 
     # ================================================================
@@ -558,7 +680,7 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
     # ================================================================
     @router.get("/dashboard")
     async def dashboard(period_id: str, _: dict = Depends(get_current_user)):
-        bsc_count = await db.bsc_targets.count_documents({"period_id": period_id})
+        bsc_count = await db.bsc_goals.count_documents({"period_id": period_id})
         objs = await db.okr_objectives.find({"period_id": period_id}, {"_id": 0}).to_list(500)
         oids = [o["id"] for o in objs]
         # OKR avg progress
@@ -568,16 +690,7 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         for k in krs:
             krs_by_obj.setdefault(k["objective_id"], []).append(k)
         for o in objs:
-            kr_list = krs_by_obj.get(o["id"], [])
-            local = []
-            for kr in kr_list:
-                try:
-                    tgt = float(kr.get("target") or 0)
-                    act = float(kr.get("actual") or 0)
-                    if tgt > 0:
-                        local.append(min(200, (act / tgt) * 100))
-                except (TypeError, ValueError):
-                    pass
+            local = [p for p in (_kr_pct(kr) for kr in krs_by_obj.get(o["id"], [])) if p is not None]
             if local:
                 pcts.append(sum(local) / len(local))
         avg_okr = round(sum(pcts) / len(pcts), 1) if pcts else 0
@@ -656,15 +769,21 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
 
     @router.get("/evaluation")
     async def get_evaluation(period_id: str, _: dict = Depends(get_current_user)):
-        """Auto-computed period review + saved SPV notes."""
+        """Auto-computed period review recap (Visi, BSC, OKR, Action Plan, KPI) + saved SPV notes."""
         note = await db.strategy_evaluations.find_one({"period_id": period_id}, {"_id": 0}) or {
             "period_id": period_id, "summary": "", "kesimpulan": "NETRAL",
             "highlights": [], "improvements": [], "next_focus": [],
         }
-        # Auto compute
-        bsc_all = await db.bsc_targets.find({"period_id": period_id}, {"_id": 0}).to_list(500)
+        period = await db.strategy_periods.find_one({"id": period_id}, {"_id": 0})
+        vision = await db.strategy_vision.find_one({"period_id": period_id}, {"_id": 0}) or {"visi": "", "misi": [], "nilai": []}
+
+        ang_map = await _decorate_anggota_map()
+        div_map = await _decorate_divisi_map()
+
+        # BSC goals (with indicators)
+        bsc_goals = await db.bsc_goals.find({"period_id": period_id}, {"_id": 0}).sort([("aspek", 1), ("urutan", 1)]).to_list(500)
         bsc_by_aspek: dict = {"FINANCIAL": [], "CUSTOMER": [], "INTERNAL": [], "LEARNING": []}
-        for b in bsc_all:
+        for b in bsc_goals:
             bsc_by_aspek.setdefault(b.get("aspek", "INTERNAL"), []).append(b)
 
         # OKR data
@@ -674,36 +793,45 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         krs_by_obj: dict = {}
         for k in krs:
             krs_by_obj.setdefault(k["objective_id"], []).append(k)
-        ang_map = await _decorate_anggota_map()
-        div_map = await _decorate_divisi_map()
 
         okr_list = []
         for o in okrs:
-            local = []
-            for kr in krs_by_obj.get(o["id"], []):
-                try:
-                    tgt = float(kr.get("target") or 0)
-                    act = float(kr.get("actual") or 0)
-                    if tgt > 0:
-                        local.append(min(200, (act / tgt) * 100))
-                except (TypeError, ValueError):
-                    pass
-            pct = round(sum(local) / len(local), 1) if local else 0
+            pct = _okr_progress(krs_by_obj.get(o["id"], []))
             okr_list.append({
                 "id": o["id"], "objective": o.get("objective"),
                 "owner_nama": (ang_map.get(o.get("owner_id")) or {}).get("nama") if o.get("owner_id") else None,
+                "owner_jabatan": o.get("owner_jabatan"),
+                "divisi_id": o.get("divisi_id"),
                 "divisi_nama": (div_map.get(o.get("divisi_id")) or {}).get("nama") if o.get("divisi_id") else None,
                 "level": o.get("level"),
                 "progress": pct,
-                "status": "EXCELLENT" if pct >= 100 else "ON_TRACK" if pct >= 70 else "AT_RISK" if pct >= 40 else "OFF_TRACK",
+                "status": _okr_label(pct),
             })
+
+        # OKR aggregate per divisi + overall
+        okr_by_divisi = {}
+        for o in okr_list:
+            dv = o["divisi_nama"] or "Company / Umum"
+            okr_by_divisi.setdefault(dv, {"nama": dv, "sum": 0.0, "n": 0})
+            okr_by_divisi[dv]["sum"] += o["progress"]
+            okr_by_divisi[dv]["n"] += 1
+        okr_divisi_rank = sorted(
+            [{"nama": d["nama"], "avg": round(d["sum"] / d["n"], 1) if d["n"] else 0,
+              "label": _okr_label(round(d["sum"] / d["n"], 1) if d["n"] else 0), "count": d["n"]}
+             for d in okr_by_divisi.values()],
+            key=lambda x: x["avg"], reverse=True,
+        )
+        overall_okr = round(sum(o["progress"] for o in okr_list) / len(okr_list), 1) if okr_list else 0
 
         # KPI aggregated per anggota
         kpis = await db.kpi_items.find({"period_id": period_id}, {"_id": 0}).to_list(1000)
+        kpi_total_bobot = sum(float(k.get("bobot") or 0) for k in kpis)
+        kpi_final_score = 0.0
         by_anggota: dict = {}
         for k in kpis:
             w, st = _score_kpi(k.get("polaritas") or "MAX", float(k.get("bobot") or 0),
                                float(k.get("target") or 0), float(k.get("aktual") or 0))
+            kpi_final_score += w
             aid = k.get("anggota_id")
             if aid not in by_anggota:
                 ang = ang_map.get(aid)
@@ -713,10 +841,10 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
             by_anggota[aid]["bobot"] += float(k.get("bobot") or 0)
             by_anggota[aid]["score"] += w
             by_anggota[aid]["count"] += 1
-
+        kpi_final_score = round(kpi_final_score, 2)
         rank = sorted(by_anggota.values(), key=lambda x: x["score"], reverse=True)
 
-        # Divisi ranking (avg of anggota scores)
+        # Divisi ranking (avg of anggota KPI scores)
         div_agg: dict = {}
         for r in by_anggota.values():
             dv = r["divisi_nama"]
@@ -725,23 +853,49 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
             div_agg[dv]["n"] += 1
         div_rank = sorted([{"nama": d["nama"], "avg_score": round(d["score_sum"] / d["n"], 2) if d["n"] else 0} for d in div_agg.values()], key=lambda x: x["avg_score"], reverse=True)
 
-        # Off-track picks
+        # Action Plan / Projects summary
+        projects = await db.strategy_projects.find({"period_id": period_id}, {"_id": 0}).to_list(500)
+        all_tids = []
+        for p in projects:
+            all_tids.extend(p.get("task_ids") or [])
+        tasks = await db.tasks.find({"id": {"$in": all_tids}}, {"_id": 0}).to_list(5000) if all_tids else []
+        tmap = {t["id"]: t for t in tasks}
+        proj_list = []
+        for p in projects:
+            linked = [tmap[i] for i in (p.get("task_ids") or []) if i in tmap]
+            total = len(linked)
+            selesai = sum(1 for t in linked if t.get("status") == "SELESAI")
+            overdue = sum(1 for t in linked if t.get("deadline") and t.get("deadline") < date.today().isoformat() and t.get("status") != "SELESAI")
+            pct = round((selesai / total * 100) if total else 0, 1)
+            status = "SELESAI" if (total and selesai == total) else "TERLAMBAT" if overdue > 0 else "BERJALAN" if total else "BELUM_MULAI"
+            proj_list.append({"id": p["id"], "nama": p.get("nama"), "outcome": p.get("outcome"), "omtm": p.get("omtm"),
+                              "divisi_nama": (div_map.get(p.get("divisi_id")) or {}).get("nama") if p.get("divisi_id") else "-",
+                              "total": total, "selesai": selesai, "overdue": overdue, "pct": pct, "status": status})
+
         off_okrs = [o for o in okr_list if o["status"] == "OFF_TRACK"][:10]
-        at_risk = [o for o in okr_list if o["status"] == "AT_RISK"][:10]
+        at_risk = [o for o in okr_list if o["status"] == "NEED_IMPROVEMENT"][:10]
 
         return {
             "note": note,
+            "period": period,
+            "vision": vision,
+            "bsc_goals": bsc_goals,
             "bsc_summary": {k: len(v) for k, v in bsc_by_aspek.items()},
+            "okr_list": okr_list,
+            "okr_by_divisi": okr_divisi_rank,
             "okr_stats": {
                 "total": len(okr_list),
-                "excellent": sum(1 for o in okr_list if o["status"] == "EXCELLENT"),
                 "on_track": sum(1 for o in okr_list if o["status"] == "ON_TRACK"),
-                "at_risk": len(at_risk),
+                "need_improvement": len(at_risk),
                 "off_track": len(off_okrs),
-                "avg_progress": round(sum(o["progress"] for o in okr_list) / len(okr_list), 1) if okr_list else 0,
+                "avg_progress": overall_okr,
             },
+            "overall_okr": {"avg": overall_okr, "label": _okr_label(overall_okr)},
             "kpi_ranking": rank[:20],
+            "kpi_final_score": kpi_final_score,
+            "kpi_total_bobot": kpi_total_bobot,
             "divisi_ranking": div_rank,
+            "projects": proj_list,
             "off_track_okrs": off_okrs,
             "at_risk_okrs": at_risk,
         }
@@ -766,7 +920,16 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         if not divisi:
             raise HTTPException(404, "Divisi tidak ditemukan.")
         vision = await db.strategy_vision.find_one({"period_id": period_id}, {"_id": 0}) or {}
-        bsc = await db.bsc_targets.find({"period_id": period_id}, {"_id": 0}).sort([("aspek", 1), ("urutan", 1)]).to_list(500)
+        bsc_goals = await db.bsc_goals.find({"period_id": period_id}, {"_id": 0}).sort([("aspek", 1), ("urutan", 1)]).to_list(500)
+        bsc = []
+        for g in bsc_goals:
+            inds = [x for x in (g.get("indikators") or []) if (x.get("nama") or x.get("target") or x.get("realisasi"))]
+            if inds:
+                for ind in inds:
+                    nm = f"{g.get('judul','')} — {ind.get('nama','')}" if g.get("judul") else ind.get("nama", "")
+                    bsc.append({"aspek": g.get("aspek"), "nama": nm, "target": ind.get("target") or ""})
+            else:
+                bsc.append({"aspek": g.get("aspek"), "nama": g.get("judul", ""), "target": ""})
         # OKR for this division (DIVISI level + INDIVIDU level in this division)
         okr_raw = await db.okr_objectives.find(
             {"period_id": period_id, "$or": [{"divisi_id": divisi_id}, {"level": "COMPANY"}]},
@@ -803,6 +966,24 @@ def build_strategy_router(db, get_current_user, require_spv, user_scope):
         )
         slug = (divisi.get("nama") or "divisi").lower().replace(" ", "-")
         fname = f"komitmen-{slug}-{period.get('nama', 'periode').lower().replace(' ', '-')}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+
+    # ================================================================
+    # EVALUASI — Rekap Raker PDF (Visi, BSC, OKR, Action Plan, KPI)
+    # ================================================================
+    @router.get("/evaluasi.pdf")
+    async def evaluasi_pdf(period_id: str, user: dict = Depends(require_spv)):
+        period = await db.strategy_periods.find_one({"id": period_id}, {"_id": 0})
+        if not period:
+            raise HTTPException(404, "Periode tidak ditemukan.")
+        data = await get_evaluation(period_id=period_id, _=user)
+        pdf_bytes = build_evaluasi_pdf(period=period, data=data)
+        slug = (period.get("nama") or "periode").lower().replace(" ", "-")
+        fname = f"evaluasi-raker-{slug}.pdf"
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",

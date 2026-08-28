@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { UserCheck, UserX, Trash2, Users, Clock, CheckCircle2, XCircle, Search, ShieldCheck, User, Link2, KeyRound, UserPlus } from "lucide-react";
+import { UserCheck, UserX, Trash2, Users, Clock, CheckCircle2, XCircle, Search, ShieldCheck, User, Link2, KeyRound, UserPlus, Star } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { listUsers, updateUserAcc, deleteUserAcc, listAnggota, listDivisi, createUserAcc, resetUserPassword } from "@/lib/api";
+import { listUsers, updateUserAcc, deleteUserAcc, listAnggota, listDivisi, createUserAcc, resetUserPassword, setDivisiHead } from "@/lib/api";
 import { useAuth, formatApiErr } from "@/lib/AuthContext";
 
 const STATUS_META = {
@@ -62,6 +62,14 @@ export default function UsersManagement() {
   const setAnggotaLink = async (u, anggota_id) => {
     try { await updateUserAcc(u.user_id, { anggota_id: anggota_id || null }); toast.success("Link anggota tersimpan"); load(); }
     catch (e) { toast.error(formatApiErr(e)); }
+  };
+  const toggleHead = async (u, ang, div) => {
+    const makeHead = div.head_anggota_id !== u.anggota_id;
+    try {
+      await setDivisiHead(div.id, makeHead ? u.anggota_id : null);
+      toast.success(makeHead ? `${u.name || u.email} menjadi Head ${div.nama}` : `Head ${div.nama} dilepas`);
+      load();
+    } catch (e) { toast.error(formatApiErr(e)); }
   };
   const remove = async (u) => {
     if (!window.confirm(`Hapus user ${u.email} permanen?`)) return;
@@ -189,7 +197,22 @@ export default function UsersManagement() {
                         </SelectContent>
                       </Select>
                       {linkedAng && linkedDiv && (
-                        <p className="mt-1 text-[10px] text-emerald-700">→ {linkedDiv.nama}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <p className="text-[10px] text-emerald-700">→ {linkedDiv.nama}</p>
+                          <button
+                            onClick={() => toggleHead(u, linkedAng, linkedDiv)}
+                            data-testid={`head-toggle-${u.user_id}`}
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition ${
+                              linkedDiv.head_anggota_id === u.anggota_id
+                                ? "border-amber-300 bg-amber-100 text-amber-900"
+                                : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                            }`}
+                            title="Head divisi bisa memonitor tugas & progres 1 divisinya (read-only)"
+                          >
+                            <Star size={10} className={linkedDiv.head_anggota_id === u.anggota_id ? "fill-amber-500 text-amber-500" : ""} />
+                            {linkedDiv.head_anggota_id === u.anggota_id ? "Head Divisi" : "Jadikan Head"}
+                          </button>
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3">

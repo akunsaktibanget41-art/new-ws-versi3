@@ -34,7 +34,7 @@ function AppRouter() {
         <Route path="/tugas-rutin" element={<TugasRutin />} />
         <Route path="/spiritual" element={<Spiritual />} />
         <Route path="/raport" element={<ProtectedRoute requireSpv><Raport /></ProtectedRoute>} />
-        <Route path="/monitoring" element={<ProtectedRoute requireSpv><Monitoring /></ProtectedRoute>} />
+        <Route path="/monitoring" element={<ProtectedRoute requireMonitor><Monitoring /></ProtectedRoute>} />
         <Route path="/strategy" element={<ProtectedRoute requireSpv><Strategy /></ProtectedRoute>} />
         <Route path="/users" element={<ProtectedRoute requireSpv><UsersManagement /></ProtectedRoute>} />
         <Route path="/profile" element={<Profile />} />

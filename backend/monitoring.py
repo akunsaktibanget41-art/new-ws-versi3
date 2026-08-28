@@ -1,11 +1,11 @@
-"""SPV Monitoring endpoints: deadline radar, workload, compliance, stagnation, division progress."""
+"""SPV/Head Monitoring endpoints: deadline radar, workload, compliance, stagnation, division progress."""
 from datetime import datetime, timezone, timedelta, date
 from typing import Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 
-def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user) -> APIRouter:
+def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user, user_scope) -> APIRouter:
     router = APIRouter(prefix="/monitoring", tags=["monitoring"])
 
     def _today():
@@ -14,8 +14,20 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user) -> APIRo
     def _days_from_today(n):
         return (date.today() + timedelta(days=n)).isoformat()
 
+    async def _guard(user, divisi_id=None):
+        """SPV → full access. Head → restricted to own divisi. Else → 403."""
+        scope = await user_scope(user)
+        if scope["is_spv"]:
+            return {"is_spv": True, "divisi": divisi_id}
+        if scope.get("head_divisi_id"):
+            return {"is_spv": False, "divisi": scope["head_divisi_id"]}
+        raise HTTPException(403, "Hanya SPV atau Head Divisi yang bisa mengakses monitoring.")
+
     @router.get("/deadline-radar")
-    async def deadline_radar(divisi_id: Optional[str] = None, _: dict = Depends(get_current_user)):
+    async def deadline_radar(divisi_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+        g = await _guard(user, divisi_id)
+        if not g["is_spv"]:
+            divisi_id = g["divisi"]
         base = {"archived": {"$ne": True}, "status": {"$ne": "SELESAI"}}
         if divisi_id:
             base["divisi_id"] = divisi_id
@@ -50,7 +62,10 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user) -> APIRo
         }
 
     @router.get("/workload")
-    async def workload(divisi_id: Optional[str] = None, _: dict = Depends(get_current_user)):
+    async def workload(divisi_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+        g = await _guard(user, divisi_id)
+        if not g["is_spv"]:
+            divisi_id = g["divisi"]
         anggota_q = {}
         if divisi_id:
             anggota_q["divisi_id"] = divisi_id
@@ -79,7 +94,10 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user) -> APIRo
         return {"anggota": rows, "max": max_val}
 
     @router.get("/amaliyah-compliance")
-    async def amaliyah_compliance(days: int = 7, _: dict = Depends(get_current_user)):
+    async def amaliyah_compliance(days: int = 7, user: dict = Depends(get_current_user)):
+        g = await _guard(user)
+        if not g["is_spv"]:
+            raise HTTPException(403, "Data kepatuhan amaliyah hanya untuk SPV.")
         end = date.today()
         start = end - timedelta(days=days - 1)
         start_s, end_s = start.isoformat(), end.isoformat()
@@ -110,16 +128,17 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user) -> APIRo
         }
 
     @router.get("/stagnant-tasks")
-    async def stagnant_tasks(days: int = 3, _: dict = Depends(get_current_user)):
+    async def stagnant_tasks(days: int = 3, user: dict = Depends(get_current_user)):
+        g = await _guard(user)
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        rows = await db.tasks.find(
-            {
-                "archived": {"$ne": True},
-                "status": {"$in": ["BELUM_MULAI", "DALAM_PROSES", "TERKENDALA"]},
-                "updated_at": {"$lt": cutoff},
-            },
-            {"_id": 0},
-        ).sort("updated_at", 1).to_list(500)
+        stg_q = {
+            "archived": {"$ne": True},
+            "status": {"$in": ["BELUM_MULAI", "DALAM_PROSES", "TERKENDALA"]},
+            "updated_at": {"$lt": cutoff},
+        }
+        if not g["is_spv"]:
+            stg_q["divisi_id"] = g["divisi"]
+        rows = await db.tasks.find(stg_q, {"_id": 0}).sort("updated_at", 1).to_list(500)
 
         anggota = await db.anggota.find({}, {"_id": 0}).to_list(500)
         anggota_map = {a["id"]: a["nama"] for a in anggota}
@@ -134,8 +153,10 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user) -> APIRo
         return {"days_threshold": days, "tasks": out}
 
     @router.get("/division-progress")
-    async def division_progress(_: dict = Depends(get_current_user)):
-        divisi = await db.divisi.find({}, {"_id": 0}).sort("urutan", 1).to_list(200)
+    async def division_progress(user: dict = Depends(get_current_user)):
+        g = await _guard(user)
+        div_q = {} if g["is_spv"] else {"id": g["divisi"]}
+        divisi = await db.divisi.find(div_q, {"_id": 0}).sort("urutan", 1).to_list(200)
         rows = []
         for d in divisi:
             base = {"divisi_id": d["id"], "archived": {"$ne": True}}
@@ -147,12 +168,43 @@ def build_monitoring_router(db: AsyncIOMotorDatabase, get_current_user) -> APIRo
             rows.append({**d, "total": total, "selesai": selesai, "terkendala": terkendala, "overdue": overdue, "pct": pct})
         return {"divisi": rows}
 
+    @router.get("/workload-heatmap")
+    async def workload_heatmap(user: dict = Depends(get_current_user)):
+        """Matrix divisi × status untuk peta beban tim (heatmap)."""
+        g = await _guard(user)
+        statuses = ["BELUM_MULAI", "DALAM_PROSES", "TERKENDALA", "SELESAI", "OVERDUE"]
+        div_q = {} if g["is_spv"] else {"id": g["divisi"]}
+        divisi = await db.divisi.find(div_q, {"_id": 0}).sort("urutan", 1).to_list(200)
+        today = _today()
+        rows = []
+        max_cell = 1
+        for d in divisi:
+            base = {"divisi_id": d["id"], "archived": {"$ne": True}}
+            cells = {
+                "BELUM_MULAI": await db.tasks.count_documents({**base, "status": "BELUM_MULAI"}),
+                "DALAM_PROSES": await db.tasks.count_documents({**base, "status": "DALAM_PROSES"}),
+                "TERKENDALA": await db.tasks.count_documents({**base, "status": "TERKENDALA"}),
+                "SELESAI": await db.tasks.count_documents({**base, "status": "SELESAI"}),
+                "OVERDUE": await db.tasks.count_documents({**base, "status": {"$ne": "SELESAI"}, "deadline": {"$lt": today, "$ne": None}}),
+            }
+            total = await db.tasks.count_documents(base)
+            active = cells["BELUM_MULAI"] + cells["DALAM_PROSES"] + cells["TERKENDALA"]
+            for v in cells.values():
+                max_cell = max(max_cell, v)
+            rows.append({**d, "cells": cells, "total": total, "aktif": active})
+        totals = {s: sum(r["cells"][s] for r in rows) for s in statuses}
+        totals["total"] = sum(r["total"] for r in rows)
+        return {"statuses": statuses, "divisi": rows, "max": max_cell, "totals": totals}
+
     @router.get("/user/{anggota_id}")
-    async def user_monitoring(anggota_id: str, days: int = 7, _: dict = Depends(get_current_user)):
+    async def user_monitoring(anggota_id: str, days: int = 7, user: dict = Depends(get_current_user)):
         """Combined per-anggota monitoring: deadline radar, workload, amaliyah compliance, stagnant tasks."""
+        g = await _guard(user)
         ang = await db.anggota.find_one({"id": anggota_id}, {"_id": 0})
         if not ang:
             return {"error": "anggota_not_found"}
+        if not g["is_spv"] and ang.get("divisi_id") != g["divisi"]:
+            raise HTTPException(403, "Anggota ini di luar divisi Anda.")
         div = await db.divisi.find_one({"id": ang.get("divisi_id")}, {"_id": 0}) if ang.get("divisi_id") else None
         ang["divisi_nama"] = div.get("nama") if div else "-"
         ang["divisi_warna"] = div.get("warna") if div else "#059669"

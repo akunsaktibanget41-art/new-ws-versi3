@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, X } from "lucide-react";
+import { Plus, Trash2, X, History, Send } from "lucide-react";
+import { formatApiErr } from "@/lib/AuthContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,7 @@ import {
   createTaskLabel, updateTaskLabel, deleteTaskLabel,
   createKategori, updateKategori, deleteKategori,
   createAnggota, updateAnggota, deleteAnggota,
-  moveTask, bulkMoveTasks,
+  moveTask, bulkMoveTasks, taskActivity, taskAddComment,
 } from "@/lib/api";
 import { ColorPicker, KATEGORI_LABEL, TIPES } from "./shared";
 
@@ -161,30 +162,38 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
             </div>
             <div>
               <label className="text-xs font-medium text-emerald-900">Penerima Tugas (Anggota)</label>
-              <Select value={form.penerima_tugas_id || "none"} onValueChange={onPickPenerima}>
-                <SelectTrigger data-testid="select-penerima"><SelectValue placeholder="Pilih anggota..." /></SelectTrigger>
-                <SelectContent className="max-h-72">
-                  <SelectItem value="none">Tanpa penerima</SelectItem>
-                  {divisiList.map((d) => {
-                    const anggota = anggotaByDivisi[d.id] || [];
-                    if (anggota.length === 0) return null;
-                    return (
-                      <SelectGroup key={d.id}>
-                        <SelectLabel className="text-[10px] uppercase text-emerald-800/60">{d.nama}</SelectLabel>
-                        {anggota.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            <span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: a.warna }} />
-                            {a.nama}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
-              <p className="mt-1 text-[10px] text-emerald-700/70">
-                Bisa pilih anggota <b>lintas divisi</b>. Tugas tetap tampil di workspace Anda sebagai <b>monitor</b> (read-only); penerima yang mengerjakan &amp; mengisi hasil.
-              </p>
+              {!editing ? (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-2.5 text-[11px] text-emerald-800" data-testid="create-self-note">
+                  Tugas baru otomatis masuk ke <b>workspace Anda sendiri</b>. Untuk memberi/menugaskan ke anggota lain, buka tugasnya lalu gunakan tombol <b>Pindahkan</b>.
+                </div>
+              ) : (
+                <>
+                  <Select value={form.penerima_tugas_id || "none"} onValueChange={onPickPenerima}>
+                    <SelectTrigger data-testid="select-penerima"><SelectValue placeholder="Pilih anggota..." /></SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      <SelectItem value="none">Tanpa penerima</SelectItem>
+                      {divisiList.map((d) => {
+                        const anggota = anggotaByDivisi[d.id] || [];
+                        if (anggota.length === 0) return null;
+                        return (
+                          <SelectGroup key={d.id}>
+                            <SelectLabel className="text-[10px] uppercase text-emerald-800/60">{d.nama}</SelectLabel>
+                            {anggota.map((a) => (
+                              <SelectItem key={a.id} value={a.id}>
+                                <span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: a.warna }} />
+                                {a.nama}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1 text-[10px] text-emerald-700/70">
+                    Mengubah penerima ke divisi lain akan <b>memindahkan</b> tugas. Tugas tetap tampil di workspace Anda sebagai <b>monitor</b> (read-only).
+                  </p>
+                </>
+              )}
             </div>
           </div>
           <div>
@@ -224,6 +233,7 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
               </div>
             </>
           )}
+          {editing && editingTask?.id && <ActivityPanel taskId={editingTask.id} />}
         </div>
         </fieldset>
         {canRevisi && (
@@ -252,6 +262,56 @@ export function TaskDialog({ open, onOpenChange, form, setForm, onSubmit, editin
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const KIND_META = {
+  create: { label: "membuat tugas", cls: "text-emerald-700" },
+  status: { label: "mengubah status", cls: "text-sky-700" },
+  revisi: { label: "meminta revisi", cls: "text-red-700" },
+  move: { label: "memindahkan tugas", cls: "text-amber-700" },
+  comment: { label: "berkomentar", cls: "text-emerald-900" },
+};
+
+function ActivityPanel({ taskId }) {
+  const [items, setItems] = useState([]);
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const load = () => { taskActivity(taskId).then((r) => { setItems(r); setErr(""); }).catch((e) => setErr(formatApiErr(e))).finally(() => setLoading(false)); };
+  useEffect(() => { setLoading(true); load(); /* eslint-disable-next-line */ }, [taskId]);
+  const send = async () => {
+    if (!text.trim()) return;
+    try { await taskAddComment(taskId, text.trim()); setText(""); load(); }
+    catch (e) { toast.error(formatApiErr(e) || "Gagal mengirim komentar"); }
+  };
+  return (
+    <div className="rounded-lg border border-emerald-200 bg-white p-3" data-testid="task-activity">
+      <p className="mb-2 flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-emerald-800"><History size={13} /> Komentar &amp; Riwayat Aktivitas</p>
+      <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+        {loading ? <p className="text-xs text-emerald-800/50">Memuat…</p> :
+          err ? <p className="text-xs italic text-red-600">{err}</p> :
+          items.length === 0 ? <p className="text-xs italic text-emerald-800/50">Belum ada aktivitas.</p> :
+          items.map((it) => {
+            const m = KIND_META[it.kind] || KIND_META.comment;
+            return (
+              <div key={it.id} className="flex gap-2 text-xs" data-testid="activity-item">
+                <div className={`mt-1 h-2 w-2 shrink-0 rounded-full ${it.kind === "comment" ? "bg-emerald-500" : "bg-slate-300"}`} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-emerald-950"><b>{it.actor_name}</b> <span className={m.cls}>{m.label}</span></p>
+                  {it.kind === "comment" && it.text && <p className="mt-0.5 rounded bg-emerald-50 px-2 py-1 text-emerald-900">{it.text}</p>}
+                  {it.kind !== "comment" && it.text && <p className="text-emerald-800/70">{it.text}</p>}
+                  <p className="mt-0.5 text-[10px] text-emerald-800/40">{new Date(it.created_at).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</p>
+                </div>
+              </div>
+            );
+          })}
+      </div>
+      <div className="mt-2 flex items-center gap-1">
+        <Input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} placeholder="Tulis komentar…" className="h-8 text-xs" data-testid="comment-input" />
+        <Button size="sm" onClick={send} className="h-8 shrink-0 bg-emerald-900 px-2.5 text-white hover:bg-emerald-800" data-testid="comment-send"><Send size={13} /></Button>
+      </div>
+    </div>
   );
 }
 

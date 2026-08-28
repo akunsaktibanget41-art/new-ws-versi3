@@ -34,15 +34,20 @@ get_current_user, require_spv = make_auth_dependencies(db)
 
 # ============ SCOPE HELPERS ============
 async def user_scope(user: dict) -> dict:
-    """Return effective scope for a user: {is_spv, user_id, anggota_id, divisi_id}"""
+    """Return effective scope: {is_spv, user_id, anggota_id, divisi_id, is_head, head_divisi_id}"""
     is_spv = user.get("role") == "spv"
     anggota_id = user.get("anggota_id")
     divisi_id = None
+    head_divisi_id = None
     if anggota_id:
         a = await db.anggota.find_one({"id": anggota_id}, {"_id": 0})
         if a:
             divisi_id = a.get("divisi_id")
-    return {"is_spv": is_spv, "user_id": user["user_id"], "anggota_id": anggota_id, "divisi_id": divisi_id}
+        hd = await db.divisi.find_one({"head_anggota_id": anggota_id}, {"_id": 0, "id": 1})
+        if hd:
+            head_divisi_id = hd["id"]
+    return {"is_spv": is_spv, "user_id": user["user_id"], "anggota_id": anggota_id,
+            "divisi_id": divisi_id, "is_head": head_divisi_id is not None, "head_divisi_id": head_divisi_id}
 
 
 async def _assert_task_access(task_id: str, user: dict) -> dict:
@@ -98,6 +103,19 @@ async def require_auth_middleware(request: Request, call_next):
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def _log_activity(task_id: str, user: dict, kind: str, text: str):
+    """Append a comment/activity entry for a task's history feed."""
+    await db.task_activity.insert_one({
+        "id": str(uuid.uuid4()),
+        "task_id": task_id,
+        "user_id": user.get("user_id"),
+        "actor_name": user.get("name") or user.get("email") or "-",
+        "kind": kind,  # create | status | revisi | move | comment
+        "text": text,
+        "created_at": now_iso(),
+    })
 
 
 # ============ TASK MODELS ============
@@ -186,12 +204,21 @@ class Divisi(BaseModel):
     nama: str
     warna: str = "#10b981"
     urutan: int = 0
+    head_anggota_id: Optional[str] = None  # 1 head/leader per divisi (read-only monitoring)
     created_at: str = Field(default_factory=now_iso)
 
 
 class DivisiCreate(BaseModel):
     nama: str
     warna: Optional[str] = "#10b981"
+
+
+class SetHeadPayload(BaseModel):
+    anggota_id: Optional[str] = None
+
+
+class CommentPayload(BaseModel):
+    text: str = Field(min_length=1)
 
 
 # ============ KATEGORI (USER-MANAGED) MODEL ============
@@ -403,33 +430,32 @@ async def list_tasks(
 @api_router.post("/tasks", response_model=Task)
 async def create_task(payload: TaskBase, user: dict = Depends(get_current_user)):
     scope = await user_scope(user)
+    # Tugas yang dibuat SELALU masuk ke workspace pembuat sendiri.
+    # Untuk memberi/menugaskan ke orang lain, gunakan fitur "Pindahkan Tugas".
+    if not scope["anggota_id"]:
+        raise HTTPException(403, "Akun Anda belum ditautkan ke anggota. Minta SPV menautkan akun Anda ke salah satu anggota agar bisa membuat tugas di workspace sendiri.")
     data = payload.model_dump()
-    # Anggota: auto-set pemberi_id = self anggota_id, and default penerima = self if empty
-    if not scope["is_spv"]:
-        if not scope["anggota_id"]:
-            raise HTTPException(403, "Akun belum terhubung ke anggota. Hubungi SPV.")
-        data["pemberi_id"] = scope["anggota_id"]
-        # If penerima kosong, default = diri sendiri
-        if not data.get("penerima_tugas_id"):
-            data["penerima_tugas_id"] = scope["anggota_id"]
-        # Tugas tetap "tinggal" di divisi & list pembuat (default Backlog) —
-        # penerima lintas divisi tetap melihatnya via scope penerima_tugas_id.
-        data["divisi_id"] = scope["divisi_id"]
-    else:
-        # SPV yang tertaut anggota tercatat sebagai pemberi agar tugas muncul sebagai delegasi darinya
-        if not data.get("pemberi_id"):
-            data["pemberi_id"] = scope["anggota_id"] or None
+    data["pemberi_id"] = scope["anggota_id"]
+    data["penerima_tugas_id"] = scope["anggota_id"]
+    data["divisi_id"] = scope["divisi_id"]
+    # Pastikan list sesuai divisi sendiri (fallback ke list pertama / Backlog)
+    lid = data.get("list_id")
+    if lid:
+        tl = await db.task_lists.find_one({"id": lid, "divisi_id": scope["divisi_id"]}, {"_id": 0, "id": 1})
+        if not tl:
+            lid = None
+    if not lid:
+        first = await db.task_lists.find_one({"divisi_id": scope["divisi_id"]}, {"_id": 0, "id": 1}, sort=[("urutan", 1)])
+        data["list_id"] = first["id"] if first else None
     task = Task(**data)
     await db.tasks.insert_one(task.model_dump())
+    await _log_activity(task.id, user, "create", "Tugas dibuat di workspace sendiri")
     return task
 
 
 @api_router.get("/tasks/{task_id}", response_model=Task)
-async def get_task(task_id: str):
-    doc = await db.tasks.find_one({"id": task_id}, {"_id": 0})
-    if not doc:
-        raise HTTPException(404, "Task not found")
-    return doc
+async def get_task(task_id: str, user: dict = Depends(get_current_user)):
+    return await _assert_task_access(task_id, user)
 
 
 @api_router.put("/tasks/{task_id}", response_model=Task)
@@ -462,6 +488,8 @@ async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(ge
     )
     if not result:
         raise HTTPException(404, "Task not found")
+    if "status" in update and update["status"] != task.get("status"):
+        await _log_activity(task_id, user, "status", f"Status diubah menjadi {update['status']}")
     return result
 
 
@@ -489,6 +517,7 @@ async def revisi_task(task_id: str, payload: RevisiPayload, user: dict = Depends
     )
     if not result:
         raise HTTPException(404, "Task not found")
+    await _log_activity(task_id, user, "revisi", f"Revisi diminta: {payload.catatan}")
     return result
 
 
@@ -499,6 +528,7 @@ async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
     if r.deleted_count == 0:
         raise HTTPException(404, "Task not found")
     await db.todo_entries.delete_many({"task_id": task_id})
+    await db.task_activity.delete_many({"task_id": task_id})
     return {"ok": True}
 
 
@@ -569,6 +599,12 @@ async def move_task(task_id: str, payload: MoveTaskPayload, user: dict = Depends
         {"id": task_id}, {"$set": update},
         return_document=True, projection={"_id": 0},
     )
+    if payload.penerima_tugas_id is not None and payload.penerima_tugas_id != task.get("penerima_tugas_id"):
+        newp = await db.anggota.find_one({"id": payload.penerima_tugas_id}, {"_id": 0, "nama": 1})
+        await _log_activity(task_id, user, "move", f"Tugas dipindahkan ke {newp.get('nama') if newp else 'anggota lain'}")
+    elif payload.divisi_id is not None and payload.divisi_id != task.get("divisi_id"):
+        newd = await db.divisi.find_one({"id": payload.divisi_id}, {"_id": 0, "nama": 1})
+        await _log_activity(task_id, user, "move", f"Tugas dipindahkan ke tim {newd.get('nama') if newd else '-'}")
     return result
 
 
@@ -583,6 +619,7 @@ async def bulk_delete_tasks(payload: BulkDeleteRequest, user: dict = Depends(get
     await _assert_bulk_task_access(payload.ids, user)
     r = await db.tasks.delete_many({"id": {"$in": payload.ids}})
     await db.todo_entries.delete_many({"task_id": {"$in": payload.ids}})
+    await db.task_activity.delete_many({"task_id": {"$in": payload.ids}})
     return {"ok": True, "deleted": r.deleted_count}
 
 
@@ -701,6 +738,86 @@ async def reorder_tasks(payload: ReorderRequest, user: dict = Depends(get_curren
     for i, tid in enumerate(payload.task_ids):
         await db.tasks.update_one({"id": tid}, {"$set": {"urutan": i}})
     return {"ok": True, "reordered": len(payload.task_ids)}
+
+
+# ============ CURRENT USER SCOPE (role/head info for frontend) ============
+@api_router.get("/me/scope")
+async def my_scope(user: dict = Depends(get_current_user)):
+    scope = await user_scope(user)
+    head_nama = None
+    if scope["head_divisi_id"]:
+        d = await db.divisi.find_one({"id": scope["head_divisi_id"]}, {"_id": 0, "nama": 1})
+        head_nama = d.get("nama") if d else None
+    return {**scope, "head_divisi_nama": head_nama, "role": user.get("role"),
+            "can_monitor": scope["is_spv"] or scope["is_head"]}
+
+
+# ============ NOTIFICATION FEED (delegasi + reminder deadline + approval) ============
+@api_router.get("/notifications/feed")
+async def notifications_feed(user: dict = Depends(get_current_user)):
+    scope = await user_scope(user)
+    today = date.today().isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    ang_rows = await db.anggota.find({}, {"_id": 0, "id": 1, "nama": 1}).to_list(1000)
+    amap = {a["id"]: a["nama"] for a in ang_rows}
+    div_rows = await db.divisi.find({}, {"_id": 0, "id": 1, "nama": 1}).to_list(200)
+    dmap = {d["id"]: d["nama"] for d in div_rows}
+
+    # 1. Delegasi baru ke saya (belum dilihat)
+    delegated = []
+    if scope["anggota_id"]:
+        seen = await db.user_task_seen.find_one({"user_id": scope["user_id"]}, {"_id": 0})
+        q = {"penerima_tugas_id": scope["anggota_id"], "pemberi_id": {"$nin": [None, scope["anggota_id"]]}, "archived": {"$ne": True}}
+        if seen and seen.get("last_seen_at"):
+            q["created_at"] = {"$gt": seen["last_seen_at"]}
+        rows = await db.tasks.find(q, {"_id": 0, "id": 1, "nama": 1, "pemberi_id": 1, "divisi_id": 1}).sort("created_at", -1).to_list(50)
+        delegated = [{"id": r["id"], "nama": r["nama"], "pemberi_nama": amap.get(r.get("pemberi_id"), "SPV"),
+                      "divisi_nama": dmap.get(r.get("divisi_id"), "")} for r in rows]
+
+    # 2. Reminder deadline (H-1, hari-ini, overdue) — scoped by role
+    base = {"archived": {"$ne": True}, "status": {"$ne": "SELESAI"}, "deadline": {"$ne": None, "$lte": tomorrow}}
+    scoped_ok = True
+    if scope["is_spv"]:
+        pass
+    elif scope["head_divisi_id"]:
+        base["divisi_id"] = scope["head_divisi_id"]
+    elif scope["anggota_id"]:
+        base["penerima_tugas_id"] = scope["anggota_id"]
+    else:
+        scoped_ok = False
+    reminders = []
+    if scoped_ok:
+        rrows = await db.tasks.find(base, {"_id": 0, "id": 1, "nama": 1, "deadline": 1, "penerima_tugas_id": 1, "divisi_id": 1}).sort("deadline", 1).to_list(100)
+        for r in rrows:
+            dl = r.get("deadline")
+            urg = "overdue" if dl < today else ("today" if dl == today else "besok")
+            reminders.append({"id": r["id"], "nama": r["nama"], "deadline": dl, "urgensi": urg,
+                              "penerima_nama": amap.get(r.get("penerima_tugas_id"), "-"), "divisi_nama": dmap.get(r.get("divisi_id"), "")})
+
+    # 3. Approval user baru (SPV)
+    approvals = 0
+    if scope["is_spv"]:
+        approvals = await db.users.count_documents({"status": "pending"})
+
+    urgent = sum(1 for r in reminders if r["urgensi"] in ("overdue", "today"))
+    count = len(delegated) + urgent + approvals
+    role = "spv" if scope["is_spv"] else ("head" if scope["head_divisi_id"] else "anggota")
+    return {"count": count, "delegated": delegated, "reminders": reminders, "approvals": approvals, "role": role}
+
+
+# ============ TASK ACTIVITY & COMMENTS ============
+@api_router.get("/tasks/{task_id}/activity")
+async def task_activity(task_id: str, user: dict = Depends(get_current_user)):
+    await _assert_task_access(task_id, user)
+    rows = await db.task_activity.find({"task_id": task_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    return rows
+
+
+@api_router.post("/tasks/{task_id}/comment")
+async def add_comment(task_id: str, payload: CommentPayload, user: dict = Depends(get_current_user)):
+    await _assert_task_access(task_id, user)
+    await _log_activity(task_id, user, "comment", payload.text.strip())
+    return {"ok": True}
 
 
 # ============ KATEGORI ROUTES ============
@@ -873,12 +990,25 @@ async def create_divisi(payload: DivisiCreate, _: dict = Depends(require_spv)):
 @api_router.put("/divisi/{divisi_id}", response_model=Divisi)
 async def update_divisi(divisi_id: str, payload: DivisiCreate, _: dict = Depends(require_spv)):
     result = await db.divisi.find_one_and_update(
-        {"id": divisi_id}, {"$set": payload.model_dump()},
+        {"id": divisi_id}, {"$set": payload.model_dump(exclude_unset=True)},
         return_document=True, projection={"_id": 0},
     )
     if not result:
         raise HTTPException(404, "Divisi not found")
     return result
+
+
+@api_router.put("/divisi/{divisi_id}/head")
+async def set_divisi_head(divisi_id: str, payload: SetHeadPayload, _: dict = Depends(require_spv)):
+    d = await db.divisi.find_one({"id": divisi_id}, {"_id": 0})
+    if not d:
+        raise HTTPException(404, "Divisi tidak ditemukan.")
+    if payload.anggota_id:
+        a = await db.anggota.find_one({"id": payload.anggota_id}, {"_id": 0})
+        if not a or a.get("divisi_id") != divisi_id:
+            raise HTTPException(400, "Head harus anggota dari divisi ini.")
+    await db.divisi.update_one({"id": divisi_id}, {"$set": {"head_anggota_id": payload.anggota_id}})
+    return {"ok": True, "divisi_id": divisi_id, "head_anggota_id": payload.anggota_id}
 
 
 @api_router.delete("/divisi/{divisi_id}")
@@ -1599,7 +1729,7 @@ async def global_search(q: str = "", user: dict = Depends(get_current_user)):
 
 # Attach auth & monitoring routers to /api
 api_router.include_router(build_auth_router(db))
-api_router.include_router(build_monitoring_router(db, require_spv))
+api_router.include_router(build_monitoring_router(db, get_current_user, user_scope))
 api_router.include_router(build_strategy_router(db, get_current_user, require_spv, user_scope))
 
 # Include router

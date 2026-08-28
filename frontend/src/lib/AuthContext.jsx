@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { authMe, authLogin, authLogout, authRegister } from "@/lib/api";
+import { authMe, authLogin, authLogout, authRegister, meScope } from "@/lib/api";
 
 const AuthContext = createContext(null);
 
@@ -11,7 +11,9 @@ export function AuthProvider({ children }) {
   const checkAuth = useCallback(async () => {
     try {
       const me = await authMe();
-      setUser(me);
+      let scope = {};
+      try { scope = await meScope(); } catch {}
+      setUser({ ...me, ...scope });
     } catch {
       setUser(false);
     } finally {
@@ -31,8 +33,11 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const r = await authLogin({ email, password });
-    if (r.status === "approved") setUser(r.user);
-    else if (r.status === "pending" && r.user) setUser(r.user);
+    if (r.user) {
+      let scope = {};
+      try { scope = await meScope(); } catch {}
+      setUser({ ...r.user, ...scope });
+    }
     return r;
   };
 

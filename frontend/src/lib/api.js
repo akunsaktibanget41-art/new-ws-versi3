@@ -32,6 +32,7 @@ export const monitoringCompliance = (params = {}) => api.get("/monitoring/amaliy
 export const monitoringStagnant = (params = {}) => api.get("/monitoring/stagnant-tasks", { params }).then((r) => r.data);
 export const monitoringDivProgress = () => api.get("/monitoring/division-progress").then((r) => r.data);
 export const monitoringUser = (anggotaId, params = {}) => api.get(`/monitoring/user/${anggotaId}`, { params }).then((r) => r.data);
+export const monitoringHeatmap = () => api.get("/monitoring/workload-heatmap").then((r) => r.data);
 
 // ============ DASHBOARD ============
 export const dashboardDigest = () => api.get("/dashboard/digest").then((r) => r.data);
@@ -65,6 +66,26 @@ export const okrDelete = (id) => api.delete(`/strategy/okr/${id}`).then((r) => r
 export const krCreate = (okrId, p) => api.post(`/strategy/okr/${okrId}/keyresults`, p).then((r) => r.data);
 export const krUpdate = (okrId, krId, p) => api.put(`/strategy/okr/${okrId}/keyresults/${krId}`, p).then((r) => r.data);
 export const krDelete = (okrId, krId) => api.delete(`/strategy/okr/${okrId}/keyresults/${krId}`).then((r) => r.data);
+
+// OKR Initiatives (sub-items on an objective, optionally tied to a KR)
+export const initiativeCreate = (okrId, p) => api.post(`/strategy/okr/${okrId}/initiatives`, p).then((r) => r.data);
+export const initiativeUpdate = (okrId, iid, p) => api.put(`/strategy/okr/${okrId}/initiatives/${iid}`, p).then((r) => r.data);
+export const initiativeDelete = (okrId, iid) => api.delete(`/strategy/okr/${okrId}/initiatives/${iid}`).then((r) => r.data);
+
+// Evaluasi (rekap raker)
+export const evaluationGet = (periodId) => api.get("/strategy/evaluation", { params: { period_id: periodId } }).then((r) => r.data);
+export const evaluationUpsert = (periodId, p) => api.put("/strategy/evaluation", p, { params: { period_id: periodId } }).then((r) => r.data);
+export const evaluasiPdfUrl = (periodId) => `${API}/strategy/evaluasi.pdf?period_id=${periodId}`;
+
+// Head/Leader divisi
+export const setDivisiHead = (divisiId, anggotaId) => api.put(`/divisi/${divisiId}/head`, { anggota_id: anggotaId }).then((r) => r.data);
+// Current user scope (role + head info)
+export const meScope = () => api.get("/me/scope").then((r) => r.data);
+// Notification feed (delegasi + reminder deadline + approval)
+export const notificationsFeed = () => api.get("/notifications/feed").then((r) => r.data);
+// Task activity & comments
+export const taskActivity = (taskId) => api.get(`/tasks/${taskId}/activity`).then((r) => r.data);
+export const taskAddComment = (taskId, text) => api.post(`/tasks/${taskId}/comment`, { text }).then((r) => r.data);
 
 export const kpiList = (periodId) => api.get("/strategy/kpi", { params: { period_id: periodId } }).then((r) => r.data);
 export const kpiCreate = (p) => api.post("/strategy/kpi", p).then((r) => r.data);

@@ -23,8 +23,14 @@ const SPV_NAV = [
   { to: "/users", label: "Manajemen User", icon: Users, testId: "nav-users", spvOnly: true },
 ];
 
+function navFor(user) {
+  if (user?.role === "spv") return [...BASE_NAV, ...SPV_NAV];
+  if (user?.can_monitor) return [...BASE_NAV, { to: "/monitoring", label: "Monitoring Tim", icon: Activity, testId: "nav-monitoring" }];
+  return BASE_NAV;
+}
+
 function SidebarBody({ onNavigate, unreadTotal, user, onLogout }) {
-  const nav = [...BASE_NAV, ...(user?.role === "spv" ? SPV_NAV : [])];
+  const nav = navFor(user);
   return (
     <div className="flex h-full flex-col">
       <div className="mb-4 px-2">
@@ -105,7 +111,7 @@ export default function AppShell() {
   const [unread, setUnread] = useState({ total: 0, by_divisi: {} });
   const location = useLocation();
   const { user, logout } = useAuth();
-  const fullNav = [...BASE_NAV, ...(user?.role === "spv" ? SPV_NAV : [])];
+  const fullNav = navFor(user);
   const current = fullNav.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to))) || fullNav[0];
 
   const refreshUnread = () => unreadTasks().then(setUnread).catch(() => {});

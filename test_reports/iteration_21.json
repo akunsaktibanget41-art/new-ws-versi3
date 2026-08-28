@@ -1,0 +1,84 @@
+{
+  "summary": "Iteration 21 full pass on Strategi & Eksekusi v2 (BSC goals, OKR owner+jabatan, achievement summary, level filter, KR polaritas/baseline, Initiatives, Evaluasi tab + PDF) and Monitoring 'Heatmap Beban'. Backend: new pytest suite /app/backend/tests/test_iter21_strategy_v2.py — 21/21 passed (BSC CRUD+persistence, OKR decoration, label thresholds, owner_jabatan persistence, 5 parametrized _kr_pct cases incl. baseline & MIN polarity, KR recompute, initiative lifecycle incl. KR-detach on KR delete, evaluation recap consistency, notes upsert persistence, evaluasi.pdf 200/application/pdf/375KB, 404 cases, auth-required cases, heatmap matrix + totals math). Frontend (Playwright, SPV login, period Q1 2026): BSC add goal -> edit judul -> add 2 indicators -> reload persistence -> delete indicator -> delete goal ALL PASS. OKR: overall 48.8%/OFF TRACK chip + per-divisi chips match rule; level filter Divisi/Company/Individu correctly hides other sections; divisi rename via pencil updates globally and reverts; create OKR (level Divisi + divisi + owner + jabatan) shows 'Budi Santoso — Kepala Divisi Marketing' on card; KR baseline1000/target5000/actual3200 MAX => 55% NEED IMPROVEMENT, edit realisasi 4500 => 87.5% ON TRACK; initiative add (KR+PIC+deadline), checkbox toggle -> checked, delete -> 0. Evaluasi: 4 summary cards, Visi&Misi, BSC recap, Capaian OKR per Divisi, Daftar OKR table, Peringkat KPI Individu, Perlu Perhatian, notes save + persist after reload, Export PDF 200/application/pdf. Heatmap: 2 divisi rows x 5 status cells + Total column + TOTAL row, intensity backgrounds verified after seeding 17 tasks (then deleted). All demo data restored; no TEST_ leftovers. Main gaps are mobile layout defects.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "OkrTab / okr-achievement-summary",
+        "issue": "Mobile (390px) horizontal overflow: 'Capaian per Divisi' chips extend to x=483 vs clientWidth 390 (documentElement.scrollWidth=483). Chips are clipped and the whole page gains a horizontal scrollbar. Cause: parent 'flex flex-wrap items-center gap-4' + 'min-w-0 flex-1' chip container + non-shrinkable chip contents (nama + pct + LABEL chip). Fix: make the per-divisi block w-full on small screens (w-full sm:flex-1), hide the h-12 w-px divider below sm, and allow the chip label to wrap/shrink.",
+        "selector": "[data-testid=\"okr-divisi-chip\"]",
+        "priority": "HIGH"
+      },
+      {
+        "component": "OkrTab / KrRow",
+        "issue": "Mobile (390px): the Key Result name input collapses to ~40-90px, showing only 'Foll' / 'Cost per l' — unusable. Cause: row is 'flex items-center gap-2' where pct+label chip and delete button are shrink-0, squeezing the flex-1 input. Fix: add flex-wrap to the row and give kr-nama basis-full (w-full sm:flex-1).",
+        "selector": "[data-testid=\"kr-row\"] [data-testid=\"kr-nama\"]",
+        "priority": "HIGH"
+      },
+      {
+        "component": "BscTab / GoalCard inline autosave",
+        "issue": "After adding an indicator, local state keeps the row without an id and every subsequent onBlur autosave re-POSTs indikators without ids, so the backend mints a NEW uuid for that row on each save (id churn until reload). GoalCard never consumes the bscUpdate response. Fix: setInds(response.indikators) after save. Functionally invisible today but breaks stable indicator references (PDF/evaluasi keys use ind.id).",
+        "selector": "[data-testid=\"bsc-add-indikator\"]",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "BscTab indicator validation",
+        "issue": "Empty indicator rows can be persisted (demo FINANCIAL goal currently has a 3rd indicator with blank nama/target/realisasi). It renders as an empty bullet '• , - / -' in the Evaluasi recap and in evaluasi.pdf. Suggest skipping blank rows on save or on render.",
+        "selector": "[data-testid=\"bsc-indikator-row\"]",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "OKR tab — Initiative form",
+        "issues": [
+          "Deadline uses the native browser date picker (<input type=\"date\">) instead of the shadcn Calendar/Popover used elsewhere in the design system — inconsistent look and poor mobile UX."
+        ]
+      },
+      {
+        "screen": "OKR card (mobile 390px)",
+        "issues": [
+          "Owner badge wraps into a tall 3-line block ('Budi Santoso' / '— Kepala Divisi' / 'Marketing'); consider a 2-line stacked badge with smaller separator instead of an inline em-dash."
+        ]
+      },
+      {
+        "screen": "Monitoring > Heatmap Beban",
+        "issues": [
+          "Header label colors are fine, but with no tasks the whole matrix shows '·' placeholders and no legend; a short intensity legend (light->dark = fewer->more tasks) would help interpret the colors."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter21_strategy_v2.py",
+    "/app/test_reports/pytest/iter21_results.xml"
+  ],
+  "action_items": [
+    "Fix mobile horizontal overflow in okr-achievement-summary (per-divisi chips) — make block full width below sm and drop the vertical divider.",
+    "Fix KR row on mobile: allow wrapping so the KR name input keeps usable width (kr-nama basis-full).",
+    "BscTab: apply the bscUpdate response to local indicator state so server-generated indicator ids stop churning on every autosave.",
+    "Optional: skip/ignore blank BSC indicator rows on save so they don't pollute the Evaluasi recap and PDF.",
+    "Optional: replace <input type=\"date\"> in the Initiative form with the shadcn Calendar component."
+  ],
+  "critical_code_review_comments": [
+    "backend/strategy.py is 994 lines — split into strategy/{periods,bsc,okr,kpi,projects,evaluation}.py; the OKR decoration/aggregation logic is duplicated between GET /strategy/okr and GET /strategy/evaluation (extract a shared helper) and per-divisi OKR averaging is duplicated a third time in OkrTab.jsx.",
+    "GET /strategy/evaluation issues ~8 sequential Mongo round-trips and workload-heatmap issues 6 count_documents per divisi (O(n) queries); consider aggregation pipelines if divisi/task volume grows.",
+    "OkrTab.jsx KrRow uses defaultValue for target/actual/baseline; after onReload() React reuses the DOM node so externally-changed values will not refresh in the input (only the computed % updates). Prefer value + key-on-server-value.",
+    "OkrTab.jsx is 642 lines with 6 components in one file — consider splitting OkrCard/KrRow/InitiativeSection/OkrDialog into separate files.",
+    "PUT /strategy/bsc/{bid} accepts an arbitrary indikators array with no length/size cap; add a sane max (e.g. 50) to avoid unbounded documents."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter21_strategy_v2.py"
+  ],
+  "success_rate": { "backend": "100%", "frontend": "95%" },
+  "seed_data_creation": "Temporarily created 17 tasks (prefix TEST_HM) across Marketing/Operasional to validate heatmap intensity colouring — all deleted afterwards (helper script removed). Backend pytest creates and deletes its own TEST_ BSC goals / OKRs / KRs / initiatives; evaluation notes were saved and restored to blank/NETRAL. Demo period Q1 2026, 2 BSC goals, 2 OKRs, 3 KRs, 1 initiative, 2 KPI, divisi names Marketing/Operasional all verified intact after testing.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "SPV akunsaktibanget06@gmail.com / Qolbu2026! (from /app/memory/test_credentials.md) — works, session_token via Bearer or cookie.",
+  "context_for_next_testing_agent": "Regression suite for this module: /app/backend/tests/test_iter21_strategy_v2.py (21 tests, session-scoped login + auto-detect of period 'Q1 2026'). All backend endpoints for BSC goals, OKR/KR/initiatives, evaluation, evaluasi.pdf and workload-heatmap are green. Frontend functional flows are all green on desktop; the only open items are the two mobile layout defects (okr-divisi-chip overflow at 390px, kr-nama input collapse) and the BSC indicator-id churn. Note there are NO tasks in the DB except one pre-existing task 'cdcscdscd', so heatmap/monitoring views are empty by default — seed tasks with divisi_id to test them and delete afterwards. Only SPV role is seeded; anggota Budi Santoso (Marketing) and Siti Aminah (Operasional) exist.",
+  "rca_of_the_issue": "Mobile overflow RCA: in OkrTab the achievement summary uses a single flex row ('flex flex-wrap items-center gap-4') where the per-divisi container is 'min-w-0 flex-1'; its children (okr-divisi-chip) are themselves flex rows with non-wrapping text nodes (divisi name + pct + uppercase 'NEED IMPROVEMENT' label), giving each chip a ~240px intrinsic min-content width. At 390px the chip container cannot shrink below its widest chip plus the 'Capaian OKR Keseluruhan' block already occupying the line, so content spills to 483px and the document scrolls horizontally. Same class of issue in KrRow, where shrink-0 pct/label/delete siblings starve the flex-1 name input. Both are pure CSS/layout fixes (wrap + full-width-on-mobile), no data or API change needed."
+}

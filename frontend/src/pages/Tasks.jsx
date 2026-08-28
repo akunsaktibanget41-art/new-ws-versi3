@@ -133,7 +133,13 @@ export default function Tasks() {
       if (!payload.tanggal_mulai) payload.tanggal_mulai = null;
       if (!payload.deadline) payload.deadline = null;
       if (editing) { await updateTask(editing.id, payload); toast.success("Tugas diperbarui"); }
-      else { delete payload.catatan_spv; delete payload.link_output; payload.divisi_id = divisiId; await createTask(payload); toast.success("Tugas baru ditambahkan"); }
+      else {
+        delete payload.catatan_spv; delete payload.link_output;
+        await createTask(payload);
+        toast.success("Tugas baru masuk ke workspace Anda");
+        // Backend memaksa tugas ke divisi pembuat — pindah ke board sendiri agar terlihat
+        if (myDivisiId && divisiId !== myDivisiId) { setDivisiId(myDivisiId); setTaskDialogOpen(false); return; }
+      }
       setTaskDialogOpen(false); refresh();
     } catch (e) { toast.error(formatApiErr(e)); }
   };

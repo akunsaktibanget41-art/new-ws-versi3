@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Target, LayoutDashboard, Landmark, Compass, Gauge, Rocket, GanttChart, Plus, Loader2, Settings2, BookOpen, FileSignature } from "lucide-react";
+import { Target, LayoutDashboard, Landmark, Compass, Gauge, Rocket, GanttChart, Plus, Loader2, Settings2, BookOpen, FileSignature, ClipboardCheck } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -16,6 +16,7 @@ import KpiTab from "@/pages/strategy/KpiTab";
 import ActionPlanTab from "@/pages/strategy/ActionPlanTab";
 import LinimasaTab from "@/pages/strategy/LinimasaTab";
 import KomitmenTab from "@/pages/strategy/KomitmenTab";
+import EvaluasiTab from "@/pages/strategy/EvaluasiTab";
 import StrategyOverview from "@/pages/strategy/StrategyOverview";
 
 export default function Strategy() {
@@ -143,6 +144,7 @@ export default function Strategy() {
             <TabsTrigger value="action" data-testid="strategy-tab-action" className="gap-1"><Rocket size={14} /> Action Plan</TabsTrigger>
             <TabsTrigger value="linimasa" data-testid="strategy-tab-linimasa" className="gap-1"><GanttChart size={14} /> Linimasa</TabsTrigger>
             <TabsTrigger value="komitmen" data-testid="strategy-tab-komitmen" className="gap-1"><FileSignature size={14} /> Komitmen</TabsTrigger>
+            <TabsTrigger value="evaluasi" data-testid="strategy-tab-evaluasi" className="gap-1"><ClipboardCheck size={14} /> Evaluasi</TabsTrigger>
           </TabsList>
 
           <TabsContent value="beranda"><StrategyOverview periodId={periodId} period={activePeriod} /></TabsContent>
@@ -153,6 +155,7 @@ export default function Strategy() {
           <TabsContent value="action"><ActionPlanTab periodId={periodId} /></TabsContent>
           <TabsContent value="linimasa"><LinimasaTab periodId={periodId} /></TabsContent>
           <TabsContent value="komitmen"><KomitmenTab periodId={periodId} /></TabsContent>
+          <TabsContent value="evaluasi"><EvaluasiTab periodId={periodId} /></TabsContent>
         </Tabs>
       )}
 

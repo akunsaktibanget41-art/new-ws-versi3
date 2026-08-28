@@ -1,20 +1,28 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Clock, TrendingUp, Users2, Activity, Flame, CalendarClock, Loader2, User2, CheckCircle2, CalendarPlus, ChevronRight } from "lucide-react";
+import { AlertTriangle, Clock, TrendingUp, Users2, Activity, Flame, CalendarClock, Loader2, User2, CheckCircle2, CalendarPlus, ChevronRight, Grid3x3 } from "lucide-react";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import {
   monitoringDeadline, monitoringWorkload, monitoringCompliance, monitoringStagnant, monitoringDivProgress,
-  monitoringUser, listDivisi, listAnggota, updateTask,
+  monitoringUser, listDivisi, listAnggota, updateTask, monitoringHeatmap,
 } from "@/lib/api";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function Monitoring() {
+  const { user } = useAuth();
+  const isHead = user?.role !== "spv" && !!user?.can_monitor;
+  const headDivisiId = user?.head_divisi_id;
+  const headDivisiNama = user?.head_divisi_nama;
   const [tab, setTab] = useState("deadline");
   const [divisiList, setDivisiList] = useState([]);
   const [divisiId, setDivisiId] = useState("");
 
   useEffect(() => { listDivisi().then(setDivisiList).catch(() => {}); }, []);
+  useEffect(() => { if (isHead && headDivisiId) setDivisiId(headDivisiId); }, [isHead, headDivisiId]);
+
+  const visibleDivisi = isHead ? divisiList.filter((d) => d.id === headDivisiId) : divisiList;
 
   return (
     <div className="space-y-4">
@@ -22,20 +30,32 @@ export default function Monitoring() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="grid h-11 w-11 place-items-center rounded-xl bg-white/15"><Activity size={20} /></div>
           <div>
-            <h3 className="font-display text-lg font-semibold">Monitoring SPV</h3>
-            <p className="text-xs text-emerald-100/80">Cockpit tim & individu — deadline, beban kerja, kepatuhan amaliyah, task stagnan.</p>
+            <h3 className="font-display text-lg font-semibold">{isHead ? "Monitoring Tim (Head Divisi)" : "Monitoring SPV"}</h3>
+            <p className="text-xs text-emerald-100/80">
+              {isHead
+                ? `Pantau tugas, beban kerja & progres divisi ${headDivisiNama || "Anda"} (read-only).`
+                : "Cockpit tim & individu — deadline, beban kerja, kepatuhan amaliyah, task stagnan."}
+            </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <label className="text-xs text-emerald-100/80">Filter tim:</label>
-            <Select value={divisiId || "ALL"} onValueChange={(v) => setDivisiId(v === "ALL" ? "" : v)}>
-              <SelectTrigger className="h-8 w-40 text-xs bg-white/10 border-white/20 text-white" data-testid="monitoring-divisi">
-                <SelectValue placeholder="Semua Tim" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">Semua Tim</SelectItem>
-                {divisiList.map((d) => <SelectItem key={d.id} value={d.id}>{d.nama}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {isHead ? (
+              <span className="rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-xs" data-testid="monitoring-head-divisi">
+                Divisi: <b>{headDivisiNama || "-"}</b>
+              </span>
+            ) : (
+              <>
+                <label className="text-xs text-emerald-100/80">Filter tim:</label>
+                <Select value={divisiId || "ALL"} onValueChange={(v) => setDivisiId(v === "ALL" ? "" : v)}>
+                  <SelectTrigger className="h-8 w-40 text-xs bg-white/10 border-white/20 text-white" data-testid="monitoring-divisi">
+                    <SelectValue placeholder="Semua Tim" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">Semua Tim</SelectItem>
+                    {divisiList.map((d) => <SelectItem key={d.id} value={d.id}>{d.nama}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -44,7 +64,8 @@ export default function Monitoring() {
         <TabsList className="bg-emerald-50 flex-wrap h-auto p-1">
           <TabsTrigger value="deadline" data-testid="tab-deadline" className="gap-1"><CalendarClock size={14} /> Deadline Radar</TabsTrigger>
           <TabsTrigger value="workload" data-testid="tab-workload" className="gap-1"><Users2 size={14} /> Beban Kerja</TabsTrigger>
-          <TabsTrigger value="compliance" data-testid="tab-compliance" className="gap-1"><Flame size={14} /> Kepatuhan Amaliyah</TabsTrigger>
+          <TabsTrigger value="heatmap" data-testid="tab-heatmap" className="gap-1"><Grid3x3 size={14} /> Heatmap Beban</TabsTrigger>
+          {!isHead && <TabsTrigger value="compliance" data-testid="tab-compliance" className="gap-1"><Flame size={14} /> Kepatuhan Amaliyah</TabsTrigger>}
           <TabsTrigger value="stagnant" data-testid="tab-stagnant" className="gap-1"><Clock size={14} /> Task Stagnan</TabsTrigger>
           <TabsTrigger value="divprogress" data-testid="tab-divprogress" className="gap-1"><TrendingUp size={14} /> Progres Divisi</TabsTrigger>
           <TabsTrigger value="peruser" data-testid="tab-peruser" className="gap-1"><User2 size={14} /> Per Anggota</TabsTrigger>
@@ -52,10 +73,11 @@ export default function Monitoring() {
 
         <TabsContent value="deadline"><DeadlineRadar divisiId={divisiId} /></TabsContent>
         <TabsContent value="workload"><WorkloadView divisiId={divisiId} /></TabsContent>
-        <TabsContent value="compliance"><ComplianceView /></TabsContent>
+        <TabsContent value="heatmap"><HeatmapView /></TabsContent>
+        {!isHead && <TabsContent value="compliance"><ComplianceView /></TabsContent>}
         <TabsContent value="stagnant"><StagnantView /></TabsContent>
         <TabsContent value="divprogress"><DivProgressView /></TabsContent>
-        <TabsContent value="peruser"><PerUserView divisiList={divisiList} initialDivisiId={divisiId} /></TabsContent>
+        <TabsContent value="peruser"><PerUserView divisiList={visibleDivisi} initialDivisiId={divisiId} lockDivisiId={isHead ? headDivisiId : null} /></TabsContent>
       </Tabs>
     </div>
   );
@@ -90,6 +112,8 @@ async function bumpDeadline(task, days, onDone) {
 }
 
 function TaskCard({ t, tone = "emerald", onAction, showActions = true }) {
+  const { user } = useAuth();
+  const isHeadRO = user?.role !== "spv" && !!user?.can_monitor;
   const tones = {
     red: "border-red-200 bg-red-50/60",
     amber: "border-amber-200 bg-amber-50/60",
@@ -109,7 +133,7 @@ function TaskCard({ t, tone = "emerald", onAction, showActions = true }) {
         {t.divisi_nama} · {t.penerima_nama} · <span className="uppercase">{t.status}</span>
       </p>
       <p className="mt-1.5 text-[11px] italic text-emerald-800/60">⚠ {reason}</p>
-      {showActions && (
+      {showActions && !isHeadRO && (
         <div className="mt-2 flex flex-wrap gap-1">
           <Button size="sm" variant="outline" className="h-7 px-2 text-[11px] border-emerald-300 text-emerald-900 hover:bg-emerald-100"
             onClick={() => markSelesai(t.id, onAction)} data-testid="action-selesai">
@@ -365,14 +389,14 @@ function DivProgressView() {
 }
 
 /* ============= PER USER ============= */
-function PerUserView({ divisiList, initialDivisiId }) {
+function PerUserView({ divisiList, initialDivisiId, lockDivisiId }) {
   const [anggotaList, setAnggotaList] = useState([]);
-  const [divisiId, setDivisiId] = useState(initialDivisiId || "ALL");
+  const [divisiId, setDivisiId] = useState(lockDivisiId || initialDivisiId || "ALL");
   const [anggotaId, setAnggotaId] = useState("");
   const [data, setData] = useState(null);
 
   useEffect(() => { listAnggota().then(setAnggotaList).catch(() => {}); }, []);
-  useEffect(() => { setDivisiId(initialDivisiId || "ALL"); }, [initialDivisiId]);
+  useEffect(() => { setDivisiId(lockDivisiId || initialDivisiId || "ALL"); }, [initialDivisiId, lockDivisiId]);
 
   const filtered = anggotaList.filter((a) => divisiId === "ALL" || a.divisi_id === divisiId);
 
@@ -391,15 +415,17 @@ function PerUserView({ divisiList, initialDivisiId }) {
           <p className="text-xs font-semibold uppercase tracking-wider text-emerald-800">Monitoring per Anggota</p>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Select value={divisiId} onValueChange={(v) => { setDivisiId(v); setAnggotaId(""); }}>
-              <SelectTrigger className="h-9 w-40 text-xs" data-testid="peruser-divisi">
-                <SelectValue placeholder="Divisi" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">Semua Divisi</SelectItem>
-                {divisiList.map((d) => <SelectItem key={d.id} value={d.id}>{d.nama}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {!lockDivisiId && (
+              <Select value={divisiId} onValueChange={(v) => { setDivisiId(v); setAnggotaId(""); }}>
+                <SelectTrigger className="h-9 w-40 text-xs" data-testid="peruser-divisi">
+                  <SelectValue placeholder="Divisi" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">Semua Divisi</SelectItem>
+                  {divisiList.map((d) => <SelectItem key={d.id} value={d.id}>{d.nama}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
             <Select value={anggotaId} onValueChange={setAnggotaId}>
               <SelectTrigger className="h-9 w-56 text-xs" data-testid="peruser-anggota">
                 <SelectValue placeholder="Pilih anggota…" />
@@ -467,6 +493,7 @@ function PerUserView({ divisiList, initialDivisiId }) {
                       <p className="text-[11px] text-emerald-800/60">{t.divisi_nama} · <span className="uppercase">{t.status}</span></p>
                     </div>
                     <p className="text-xs font-bold text-amber-800">{t.hari_diam}h diam</p>
+                    {!lockDivisiId && (
                     <div className="flex gap-1">
                       <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => markSelesai(t.id, load)}>
                         <CheckCircle2 size={12} /> Selesai
@@ -475,6 +502,7 @@ function PerUserView({ divisiList, initialDivisiId }) {
                         <CalendarPlus size={12} /> +7h
                       </Button>
                     </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -518,6 +546,87 @@ function MiniStat({ label, value, tone }) {
     <div>
       <p className={`font-display text-xl font-bold ${c}`}>{value ?? 0}</p>
       <p className="text-[10px] uppercase tracking-wider text-emerald-800/60">{label}</p>
+    </div>
+  );
+}
+
+/* ============= HEATMAP BEBAN (divisi × status) ============= */
+const HEAT_COLS = [
+  { key: "BELUM_MULAI", label: "Belum Mulai", rgb: "100,116,139" },
+  { key: "DALAM_PROSES", label: "Proses", rgb: "217,119,6" },
+  { key: "TERKENDALA", label: "Kendala", rgb: "220,38,38" },
+  { key: "SELESAI", label: "Selesai", rgb: "5,150,105" },
+  { key: "OVERDUE", label: "Overdue", rgb: "225,29,72" },
+];
+
+function heatBg(val, max, rgb) {
+  if (!val) return "transparent";
+  const alpha = 0.14 + 0.86 * (val / (max || 1));
+  return `rgba(${rgb},${Math.min(1, alpha).toFixed(2)})`;
+}
+
+function HeatmapView() {
+  const [data, setData] = useState(null);
+  useEffect(() => { monitoringHeatmap().then(setData).catch(() => setData({ divisi: [], statuses: [], max: 1, totals: {} })); }, []);
+  if (!data) return <LoadingBox />;
+  if (data.divisi.length === 0) return <EmptyBox label="Belum ada divisi." />;
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-emerald-100 bg-white p-4">
+        <div className="flex items-center gap-2">
+          <Grid3x3 size={16} className="text-emerald-800" />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-emerald-800/70">Peta Beban Tim</p>
+            <p className="text-xs text-emerald-800/60">Distribusi tugas per divisi × status. Warna makin pekat = makin banyak tugas.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-emerald-100 bg-white p-2">
+        <table className="w-full min-w-[640px] border-separate" style={{ borderSpacing: "4px" }}>
+          <thead>
+            <tr>
+              <th className="p-2 text-left text-[11px] font-semibold uppercase tracking-wider text-emerald-800/60">Divisi</th>
+              {HEAT_COLS.map((c) => (
+                <th key={c.key} className="p-2 text-center text-[11px] font-semibold uppercase tracking-wider" style={{ color: `rgb(${c.rgb})` }} data-testid={`heatmap-col-${c.key.toLowerCase()}`}>{c.label}</th>
+              ))}
+              <th className="p-2 text-center text-[11px] font-semibold uppercase tracking-wider text-emerald-800/60">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.divisi.map((d) => (
+              <tr key={d.id} data-testid="heatmap-row">
+                <td className="p-2">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ background: d.warna }} />
+                    <span className="text-sm font-medium text-emerald-950">{d.nama}</span>
+                  </div>
+                </td>
+                {HEAT_COLS.map((c) => {
+                  const val = d.cells?.[c.key] || 0;
+                  const bg = heatBg(val, data.max, c.rgb);
+                  const dark = val && val / (data.max || 1) > 0.5;
+                  return (
+                    <td key={c.key} className="rounded-lg p-3 text-center font-display text-lg font-bold transition-colors"
+                      style={{ background: bg, color: dark ? "#fff" : val ? `rgb(${c.rgb})` : "#cbd5e1" }} data-testid="heatmap-cell">
+                      {val || "·"}
+                    </td>
+                  );
+                })}
+                <td className="p-3 text-center font-display text-lg font-bold text-emerald-900">{d.total}</td>
+              </tr>
+            ))}
+            <tr>
+              <td className="p-2 text-xs font-semibold uppercase tracking-wider text-emerald-800/70">Total</td>
+              {HEAT_COLS.map((c) => (
+                <td key={c.key} className="p-2 text-center text-sm font-bold text-emerald-900">{data.totals?.[c.key] ?? 0}</td>
+              ))}
+              <td className="p-2 text-center text-sm font-bold text-emerald-900">{data.totals?.total ?? 0}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
