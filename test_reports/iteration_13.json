@@ -1,0 +1,35 @@
+{
+  "summary": "Full test iterasi 11.1 (Workspace Per-Anggota + Delegasi). Backend: 11/11 pytest passed — RBAC divisi/anggota (SPV-only), delegasi flow (Budi→Siti), pemberi read-only (403), penerima update hasil OK, brief_link/hasil_link/hasil_catatan persist, rutin scope per-divisi. Frontend: All 8 UI verifications passed after fixing one critical bug. Found & fixed a runtime crash in TableView.jsx (Row component was missing isSpv prop, causing 'ReferenceError: isSpv is not defined' that broke the whole Tabel view for anggota).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TableView.jsx > Row", "issue": "Runtime crash 'ReferenceError: isSpv is not defined' when anggota opens Tabel view — Row() destructured props did not include isSpv but used it on line 215. FIXED by testing agent: added isSpv={isSpv} to <Row/> call at line 85 and default isSpv=true to Row() signature.", "selector": "[data-testid=\"view-table\"]", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_delegasi.py",
+    "/app/test_reports/pytest/iter11_results.xml"
+  ],
+  "action_items": [
+    "Retest scenarios where Row is used with different isSpv contexts to ensure the default doesn't mask hidden regressions.",
+    "Consider ESLint 'no-undef' rule enforcement to catch this class of bug at build time."
+  ],
+  "critical_code_review_comments": [
+    "TableView.jsx Row lacked isSpv prop — caused whole page crash for anggota. Fixed.",
+    "server.py list_tasks correctly scopes anggota view via $or [penerima_tugas_id, pemberi_id, rutin+divisi_id]. Delegasi read-only enforced in update_task (403 when only pemberi).",
+    "server.py is now ~1580 lines — consider splitting into routers per resource (tasks, divisi, anggota, raport, amaliyah) for maintainability."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/tasks/TableView.jsx",
+    "/app/backend/tests/test_iter11_delegasi.py"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% (8/8 after fix)"},
+  "test_credentials": "SPV admin@ruangsanad.id/AdminSanad2025! ; Budi budi@test.id/budi12345 ; Siti siti@test.id/siti12345",
+  "seed_data_creation": "Test task 'TEST_UI Delegasi Budi ke Siti' created & cleaned. pytest tests self-cleanup via TestDelegasi::test_cleanup. Fixture task 'Tugas dari Budi ke Siti' with hasil preserved as it existed prior.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iterasi 11.1 backend fully covered by /app/backend/tests/test_iter11_delegasi.py. Frontend Monitor(read-only) dialog, delegasi badge, hasil column all verified as working after TableView Row prop fix. If retest needed, only ~2s pytest run + one quick playwright login-as-Budi → view-table → verify no runtime error.",
+  "rca of the issue": "Row component in TableView.jsx used isSpv at line 215 (onAddInline conditional) but did not destructure it from props. React threw ReferenceError at render time only when the Table view was rendered with a non-empty task list AND the Penerima column tried to render the AnggotaSelect (which passes onAddInline). SPV wasn't affected in initial dev because isSpv resolved at compile from parent closure scope — but the actual JSX is inside Row's own scope so it always broke. Fix: pass isSpv from TableView parent props (already available) into Row and add to Row's destructure with default true (backward-compatible). Reproduction: login as anggota, /tasks → click Tabel → runtime overlay 'isSpv is not defined'. After fix: Tabel view renders, Hasil Tugas column visible, 'Dari Budi' badge visible, Monitor dialog opens correctly."
+}

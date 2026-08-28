@@ -1,0 +1,30 @@
+{
+  "summary": "Frontend verification iterasi 11.5 bugfix (v2). All 4 bug fixes confirmed working via Playwright on preview URL with Budi/Rina/SPV accounts.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_scenarios": [
+    "(1) listMap crash FIXED: Login Budi/Rina/SPV → /tasks → toggle view-table dan bolak-balik view-board multiple times. No 'listMap is not defined' overlay, no 'Uncaught runtime errors' overlay. Table renders normally with rows.",
+    "(2) Default Backlog: Fixture 'TEST_UI_iter115_bug1' (delegasi Budi→Rina, lintas divisi) tampil di kolom Backlog di kanban Budi (Umum) — bukan Tanpa List. Di Rina (Marketing), muncul di Backlog via fallback grouping by status BELUM_MULAI.",
+    "(3) Sinkron status: Rina drag TEST_UI_iter115_bug1 Backlog→Dikerjakan → Budi refresh /tasks, task tampil di kolom Dikerjakan. Rina drag lagi Dikerjakan→Selesai → Budi lihat di Selesai. Restore ke Backlog OK.",
+    "(4) Badge status statis di table view: Budi buka tabel, TEST_UI_iter115_bug1 (list_id di Marketing divisi setelah drag) tampil badge 'Dalam Proses' pada kolom Status (data-testid row-status-{id} present), bukan '—'. Setelah restore ke Backlog: badge kembali 'Belum Mulai' pada view Rina.",
+    "Regresi: view kanban↔tabel bolak-balik Budi/Rina/SPV → no crash, no console errors selain 401 pada /api/auth/me pre-login (normal)."
+  ],
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "TableView.jsx Row destructure includes listMap — konsisten dengan usage di baris 220 (task.list_id && !listMap[task.list_id]). Fix valid.",
+    "Kolom Status view tabel untuk cross-divisi task: badge statis STATUS_COLORS/STATUS_LABELS bekerja benar untuk BELUM_MULAI/DALAM_PROSES/SELESAI — verified via fixture drag."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "SPV admin@ruangsanad.id/AdminSanad2025!, Budi budi@test.id/budi12345, Rina rina@test.id/rina12345 — semua valid",
+  "seed_data_creation": "Tidak ada seed baru. Fixture 'TEST_UI_iter115_bug1' dipindah Backlog→Dikerjakan→Selesai→Backlog dan berhasil dikembalikan ke Backlog di Rina.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter 11.5 bug fixes verified. Fixture positions restored. testid pattern: kanban-column-{list_id} + kanban-column-no-list; task-card-{id}; row-status-{id} appears ONLY for cross-divisi tasks in table view.",
+  "rca of the issue": "N/A — verifikasi berhasil"
+}

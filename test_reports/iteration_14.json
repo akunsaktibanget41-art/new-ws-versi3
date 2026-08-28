@@ -1,0 +1,28 @@
+{
+  "summary": "Bug fix verification for 'user tidak bisa login/daftar sebagai SPV'. Backend curl verified: DB promoted correctly (akunsaktibanget33@gmail.com=SPV approved, teguhvidy2@gmail.com=anggota approved, spvbaru@test.id deleted, 5 users total). Full E2E flow tested via Playwright: register → login as pending → manually navigate /login → approve by SPV → re-login. All approval/login paths PASS. Sidebar & Budi delegation regression PASS. HOWEVER: the pending-banner + switch-account-btn feature CANNOT render for email/password pending users because backend /api/auth/login does not issue a session cookie for pending users (auth.py line 206), so AuthContext.user remains `false` after login attempt and the conditional `user && user.status === 'pending'` in Login.jsx line 61 is never true. The banner will ONLY appear for Google-OAuth pending users (google_session issues cookie regardless of status). Since the original user-reported bug was specifically about Google OAuth pending accounts (akunsaktibanget33), the code path that matters (OAuth) is logically sound though not testable via Playwright.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Login.jsx pending-banner", "issue": "Banner (data-testid=pending-banner) & switch-account-btn only render when useAuth().user has status==='pending'. Email/password login for pending user does NOT set a session cookie (backend auth.py line 204-206), so AuthContext.login() sees status!=='approved' and never calls setUser (AuthContext.jsx line 34); subsequent /me returns 401 → user=false → banner condition false. Banner therefore only reachable via Google OAuth pending flow (which does set cookie). Consider either (a) also setting user state locally on pending email/password login, OR (b) documenting this is Google-OAuth-only.", "selector": "[data-testid=pending-banner]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Decision needed: should pending-banner also work for email/password pending users? If yes, AuthContext.login() should setUser(r.user) even when status==='pending' (session still not authoritative because no cookie, but UI can show banner). Or backend can issue short-lived session for pending users. Currently email/password pending flow uses navigate('/pending') from Login.jsx submit — which works fine on its own, but user cannot go back to /login and see the banner.",
+    "For Google OAuth pending flow (the actual user-reported bug), verify manually with a real Google account — logic looks correct in code."
+  ],
+  "critical_code_review_comments": [
+    "Login.jsx banner condition depends on AuthContext.user being set for pending users; AuthContext.login only setUser on approved. Discrepancy between OAuth flow (cookie set for pending) and email/password flow (no cookie for pending) means banner behavior differs by auth provider — worth documenting.",
+    "Backend register/login/approve endpoints all working per curl. DB state verified matches user expectation (5 users, admin + akunsaktibanget33 SPV approved, teguhvidy2 approved anggota, budi/siti approved anggota)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (verified via curl)", "frontend": "6/7 tested flows PASS. 1 flow (pending-banner via email/pw) not reachable — see UI bug."},
+  "test_credentials": "SPV admin@ruangsanad.id/AdminSanad2025! ; Budi budi@test.id/budi12345 ; test user created & approved: testpending1787818400@test.id/test123456",
+  "seed_data_creation": "Created & approved testpending1787818400@test.id. Left as approved anggota (per user note, OK to leave or delete).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug fix scope achieved for the primary flow (removing forced /pending redirect from Login.jsx). The banner mechanism only fires for Google OAuth pending users due to how AuthContext.login handles pending vs approved status. If main agent wants banner to also work for email/pw pending, need to setUser(r.user) in AuthContext.login when status==='pending'. All regressions (sidebar, Budi read-only /tasks) pass.",
+  "rca of the issue": "Original bug: user with Google OAuth pending status couldn't get out of /pending loop because Login.jsx had a useEffect forcing pending→/pending. Fix removed that useEffect and added a banner. Verified: (a) force redirect REMOVED — email/pw pending user can navigate to /login manually and see the form (URL stays /login), (b) DB corrections applied correctly, (c) approve/login-after-approve works. Side note: banner won't render for email/pw pending users because AuthContext.login does not setUser on pending status — this is a logic gap but the primary OAuth path (where user IS actually stuck) sets a session cookie so authMe() populates the pending user and banner will render there."
+}

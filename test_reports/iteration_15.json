@@ -1,0 +1,23 @@
+{
+  "summary": "Follow-up frontend verification for pending-banner fix in AuthContext.login (also setUser when status==='pending'). All 4 requested scenarios PASS. (1) Register pending1787818659@test.id via /register succeeded. (2) Login as pending user submits and navigates to /pending (initial navigate from submit handler is expected/allowed); pressing browser back to /login now renders data-testid=pending-banner with the correct email + data-testid=switch-account-btn. (3) Clicking switch-account-btn calls logout, clears state, then logging in as SPV admin@ruangsanad.id/AdminSanad2025! lands on Beranda (/). (4) Regression: Budi budi@test.id/budi12345 logs in cleanly, /tasks Tabel view renders without any 'isSpv is not defined' / ReferenceError. Fix in AuthContext.jsx line 35 (else if status==='pending' && r.user → setUser(r.user)) works as intended.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Note: Banner only appears while React state persists (in-app navigation / browser back). A full page reload of /login triggers checkAuth() → /me returns 401 for pending (no session cookie issued) → user=false → banner hides. This is by design given the backend contract (pending user has no session). Acceptable per spec ('navigasi awal ke /pending boleh terjadi, tapi saat kembali ke /login banner harus tampil').",
+    "Consider persisting a lightweight pending marker in sessionStorage if you want the banner to survive hard reloads too — optional enhancement."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only per request)", "frontend": "4/4 scenarios PASS"},
+  "test_credentials": "SPV admin@ruangsanad.id/AdminSanad2025! ; Budi budi@test.id/budi12345 ; created pending pending1787818659@test.id/test123456 (still pending, not approved)",
+  "seed_data_creation": "Created new pending account pending1787818659@test.id (test123456). Left as pending — safe to delete or approve later.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Fix from iteration_14 MEDIUM issue is verified. pending-banner + switch-account-btn now render for email/password pending users when returning to /login via in-app back navigation. Confirmed SPV login post switch works and Budi regression /tasks Tabel view is clean.",
+  "rca of the issue": "Previously AuthContext.login only setUser on approved. Now: 'else if (r.status === pending && r.user) setUser(r.user)'. Backend /api/auth/login returns {status:'pending', user:{...}} without setting a cookie, so React state carries the pending user while in-memory; on hard reload /me 401s and state resets to false — this is expected."
+}

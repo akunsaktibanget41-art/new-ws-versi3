@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="4" time="2.361" timestamp="2026-08-27T10:20:04.534648+00:00" hostname="agent-env-4ae9e815-b8c8-44ec-81bf-9bffaf5ca71d"><testcase classname="tests.test_iter11_5" name="test_bug1_delegasi_stays_in_pemberi_backlog" time="1.036"><failure message="AssertionError: Budi &amp; Rina should be in different divisi&#10;assert None != None">backend/tests/test_iter11_5.py:57: in test_bug1_delegasi_stays_in_pemberi_backlog
+    assert budi_div != rina_div, "Budi &amp; Rina should be in different divisi"
+E   AssertionError: Budi &amp; Rina should be in different divisi
+E   assert None != None</failure></testcase><testcase classname="tests.test_iter11_5" name="test_bug2_status_sync_via_list_change" time="0.133"><failure message="KeyError: 'divisi_id'">backend/tests/test_iter11_5.py:89: in test_bug2_status_sync_via_list_change
+    budi_div = me_budi["divisi_id"]
+               ^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'divisi_id'</failure></testcase><testcase classname="tests.test_iter11_5" name="test_bug3_spv_linked_anggota_creates_delegasi" time="0.536"><failure message="assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/test_iter11_5.py:168: in test_bug3_spv_linked_anggota_creates_delegasi
+    lists = sorted(_get_lists(spv, divisi["id"]), key=lambda x: x.get("urutan", 99))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/tests/test_iter11_5.py:39: in _get_lists
+    assert r.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter11_5" name="test_cleanup_delegasi_task" time="0.059" /></testsuite></testsuites>

@@ -1,0 +1,46 @@
+{
+  "summary": "Iter9 backend tests for Strategy & Execution module (BSC/OKR/KPI/Action Plan/Linimasa) + iter7/8 regressions. 27/28 tests pass. One real backend RBAC bug uncovered: linked anggota cannot update their own KPI 'aktual' (always 403) because strategy.py resolves anggota via wrong lookup key (anggota.user_id) instead of user.anggota_id (which is how auth stores the linkage).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PUT /api/strategy/kpi/{kid} (and PUT/POST /api/strategy/okr/{oid}/keyresults)",
+        "issue": "RBAC lookup is broken. strategy.py resolves 'my anggota_id' via `db.anggota.find_one({user_id: user.user_id})`, but auth stores linkage on `user.anggota_id` (set via PUT /api/auth/users/{uid} {anggota_id}) — NOT on `anggota.user_id`. Result: any approved anggota linked via the SPV admin flow gets my_id=None, so (a) they can NEVER update their own KPI aktual (always 403 'Bukan KPI Anda'), (b) they can NEVER add/update KR on their own OKR (always 403), and (c) OKRs with owner_id=None allow anyone to add KRs (None==None passes the check). FIX: use existing `user_scope(user)` helper — it correctly reads `user.get('anggota_id')`. Replace every `my_ang = await db.anggota.find_one({'user_id': user['user_id']}, ...); my_id = my_ang['id'] if my_ang else None` with `scope = await user_scope(user); my_id = scope.get('anggota_id')`. Additionally guard the None==None case: `if my_id is None or obj.owner_id != my_id: raise 403`.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "PUT /api/strategy/kpi/{kid}",
+        "issue": "The 'anggota only-aktual' check has awkward boolean logic. If a non-SPV sends BOTH `aktual` and `bobot`, the first `any()` returns False (aktual is not None), so the second guard is skipped and bobot is written. Simplify to: `if not scope['is_spv']: forbidden = [k for k in payload_dict if k not in {'aktual'} and payload_dict[k] is not None]; if forbidden: raise 403`."
+      },
+      {
+        "endpoint": "GET /api/strategy/okr",
+        "issue": "Sorting uses `.sort([('level',1),('urutan',1)])` — string sort on level puts COMPANY before DIVISI before INDIVIDU alphabetically (COMPANY, DIVISI, INDIVIDU) which is fine coincidentally, but relying on alpha order is fragile. Consider explicit priority mapping."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter9_strategy.py",
+    "/app/test_reports/pytest/iter9_results.xml"
+  ],
+  "action_items": [
+    "Fix strategy.py RBAC lookup (KPI PUT + OKR keyresult add/update): replace direct db.anggota lookup with user_scope() helper so anggota linked via user.anggota_id can actually update their own KPI aktual and OKR KRs. Also handle my_id=None case defensively so unowned OKRs (owner_id=None) don't allow arbitrary users to add KRs.",
+    "Tighten KPI PUT payload guard so non-SPV cannot smuggle bobot/target through by also including aktual in the same request."
+  ],
+  "critical_code_review_comments": [
+    "strategy.py duplicates the (broken) anggota lookup pattern in 3 places (KPI PUT, KR POST, KR PUT). Extract a helper `_resolve_my_anggota_id(user)` using user_scope() to DRY it up and fix once.",
+    "OkrCreate/OkrUpdate: `level` is a free string. Consider Literal['COMPANY','DIVISI','INDIVIDU'] for validation. Same for `aspek` in BscCreate and `polaritas` in KpiCreate.",
+    "_score_kpi: when target=0 and aktual>0 the function sets achievement=0 (returns OFF_TRACK) — for MIN polarity that may actually be perfect. Consider special-casing.",
+    "strategy.py at 610 lines is fine but if the module continues growing (Komitmen/Evaluasi later), split into strategy/periods.py, okr.py, kpi.py, projects.py.",
+    "list_okr uses `_decorate_anggota_map()` fetching up to 500 anggota per request — for larger orgs prefer selective $lookup or batch fetch by ids present in objectives."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter9_strategy.py"],
+  "success_rate": {"backend": "96% (27/28)", "frontend": "n/a (backend-only)"},
+  "test_credentials": "SPV: akunsaktibanget06@gmail.com / Qolbu2026! (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Per-run itest_* fixtures: 1 divisi, 2 anggota, 2 tasks (one overdue one done), 1 non-SPV approved user linked to seed anggota, 1 period + BSC/OKR/KPI/Project artifacts. All cleaned up in module-scope teardown.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Test file: /app/backend/tests/test_iter9_strategy.py (28 tests). All Strategy endpoints and iter7/8 regressions covered. After main agent fixes the RBAC lookup, re-run: `pytest backend/tests/test_iter9_strategy.py -v`. Expected 28/28. The specific failing test is test_kpi_rbac_anggota_can_update_aktual; test_okr_kr_rbac_non_owner currently passes only because we used a fake owner_id — an additional test case for owner_id=None + linked anggota should be added post-fix.",
+  "rca of the issue": "In backend/strategy.py, three handlers (add_kr line ~350, update_kr line ~369, update_kpi line ~430) do: `my_ang = await db.anggota.find_one({'user_id': user['user_id']}, ...); my_id = my_ang['id'] if my_ang else None`. This assumes anggota documents carry a `user_id` field. However auth's PUT /users/{uid} sets `anggota_id` on the USER document (see backend/auth.py UpdateUserPayload line 35-38), and user_scope (backend/server.py line 37-45) correctly reads `user.get('anggota_id')`. No code path writes `anggota.user_id` when SPV approves+links via /auth/users PUT. Reproduction: (1) register anggota user, (2) SPV PUT /auth/users/{uid} {status:approved, anggota_id:<A>}, (3) as that user, PUT /api/strategy/kpi/{k} where k.anggota_id=<A> {aktual:X} → 403 'Bukan KPI Anda'. Mitigation options: (A) preferred — use user_scope() to read anggota_id from user doc, or (B) also mirror-write anggota.user_id during the approve+link step in auth.py update_user."
+}

@@ -1,0 +1,30 @@
+{
+  "summary": "Iterasi 11.6 fully verified: (BUG1) update_task guard divisi_id fix, (FEAT2) notifications bell + mark_seen, (FEAT3) move_task per-orang w/ authz. Backend 8/8 pytest pass; frontend Playwright verified bell badge, panel item text 'dari Budi · Umum', mark-all clears badge and persists after reload; move-dialog exposes move-select-penerima grouped per divisi (Umum, Coba Divisi, Coba Divisi 2, Marketing) with Rina reachable cross-divisi.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_scenarios": [
+    "BUG1: Rina (Marketing) PUT /tasks/{id} dgn payload divisi_id=Umum (task's current) + hasil_link/hasil_catatan → 200 OK. Guard hanya menolak jika divisi_id BERUBAH (test_rina_cannot_change_divisi_to_other → 403).",
+    "FEAT2: Fresh task Budi→Rina → GET /notifications/incoming returns count=1 dgn pemberi_nama='Budi' + divisi_nama='Umum'; POST /notifications/mark_seen → count=0. UI: notif-bell visible (desktop viewport), notif-badge text='1', click bell → notif-panel with 'TEST_UI_iter116_notif dari Budi · Umum', klik notif-mark-all → badge hilang; reload → badge tetap hilang (persist via user_task_seen).",
+    "FEAT3 backend: pemberi (Budi) reassign to Siti cross-divisi → 200 + moved_at set; current penerima (Rina) reassign → 200; unauthorized (Siti bukan pemberi/penerima) → 403; SPV move divisi_id → 200.",
+    "FEAT3 UI: move-dialog terbuka dgn move-select-divisi + move-select-penerima. Dropdown penerima grouped per divisi menampilkan: — Tetap (tidak berubah) —, UMUM (Budi, Siti), COBA DIVISI (jojon), COBA DIVISI 2 (sinta), MARKETING (Rina). Confirmed Rina (cross-divisi) selectable."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_6.py",
+    "/app/test_reports/pytest/iter11_6.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "update_task guard di server.py:447 sekarang benar-benar tolerant: 'update[\"divisi_id\"] != task.get(\"divisi_id\")' — fix valid untuk cross-divisi delegasi.",
+    "move_task authz di server.py:541-544 memvalidasi payload.penerima_tugas_id berubah → cek pemberi/penerima/SPV; sudah tepat.",
+    "notifications/incoming: menggunakan created_at > last_seen_at → simple & efektif. Note: task yg dibuat SEBELUM last_seen tidak akan muncul lagi (by design).",
+    "Minor: anggota di divisi yang sama dgn task creator masih bisa PUT hasil (mis. Siti bisa edit tugas Rina di Marketing? tidak, karena _assert_task_access filter by divisi). Ini bukan regresi; hanya catatan bahwa update_task tidak mensyaratkan pemberi/penerima match utk anggota same-divisi."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter11_6.py"],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100%"},
+  "test_credentials": "SPV admin@ruangsanad.id/AdminSanad2025!, Budi budi@test.id/budi12345, Rina rina@test.id/rina12345, Siti siti@test.id/siti12345 — all valid",
+  "seed_data_creation": "Semua fixture task TEST_iter116_* dihapus setelah masing-masing test (try/finally). Test UI membuat TEST_UI_iter116_notif dan menghapusnya setelah verifikasi.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "data-testid untuk fitur iter11.6: notif-bell (desktop+mobile dua node — pilih yang visible), notif-badge, notif-panel, notif-item-{task_id}, notif-mark-all; move-dialog, move-select-divisi, move-select-penerima (grouped Select shadcn dgn label divisi uppercase). update_task guard: divisi_id boleh sama dgn task.divisi_id meski beda dgn scope divisi user.",
+  "rca of the issue": "BUG1 RCA: guard sebelumnya 'if update[divisi_id] != scope[divisi_id]' menolak Rina (Marketing) mengedit tugas Umum karena form dialog selalu mengirim divisi_id task. Fix: tambah 'and update[divisi_id] != task.get(divisi_id)' — hanya tolak jika divisi_id benar-benar akan berubah. Verified via pytest test_rina_can_edit_hasil_with_creator_divisi_id_in_payload."
+}
