@@ -2,6 +2,7 @@
 import os
 import uuid
 import secrets
+import hashlib
 import bcrypt
 import httpx
 from datetime import datetime, timezone, timedelta
@@ -55,6 +56,10 @@ class CreateUserPayload(BaseModel):
 
 class ResetPasswordPayload(BaseModel):
     new_password: str = Field(min_length=6)
+
+
+class ApiKeyCreatePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
 
 
 # ============== HELPERS ==============
@@ -112,17 +117,24 @@ async def get_current_user_optional(request: Request, db):
     if not token:
         return None
     sess = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
-    if not sess:
+    if sess:
+        expires_at = sess.get("expires_at")
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if expires_at and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at and expires_at < datetime.now(timezone.utc):
+            await db.user_sessions.delete_one({"session_token": token})
+            return None
+        return await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0})
+
+    # API keys are stored only as SHA-256 hashes and may authenticate server-to-server calls.
+    key_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    api_key = await db.api_keys.find_one({"key_hash": key_hash, "revoked_at": None}, {"_id": 0})
+    if not api_key:
         return None
-    expires_at = sess.get("expires_at")
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at and expires_at < datetime.now(timezone.utc):
-        await db.user_sessions.delete_one({"session_token": token})
-        return None
-    user = await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0})
+    await db.api_keys.update_one({"id": api_key["id"]}, {"$set": {"last_used_at": datetime.now(timezone.utc)}})
+    user = await db.users.find_one({"user_id": api_key["user_id"]}, {"_id": 0})
     return user
 
 
@@ -181,6 +193,8 @@ async def seed_admin(db):
         await db.users.create_index("user_id", unique=True)
         await db.user_sessions.create_index("session_token", unique=True)
         await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
+        await db.api_keys.create_index("key_hash", unique=True)
+        await db.api_keys.create_index("user_id")
     except Exception:
         pass
 
@@ -340,7 +354,45 @@ def build_auth_router(db: AsyncIOMotorDatabase) -> APIRouter:
                 raise HTTPException(400, "Tidak bisa hapus SPV terakhir.")
         r = await db.users.delete_one({"user_id": user_id})
         await db.user_sessions.delete_many({"user_id": user_id})
+        await db.api_keys.delete_many({"user_id": user_id})
         return {"ok": True, "deleted": r.deleted_count}
+
+    # ---------- API KEYS (SPV) ----------
+    @router.get("/api-keys")
+    async def list_api_keys(current: dict = Depends(require_spv)):
+        return await db.api_keys.find(
+            {"user_id": current["user_id"]},
+            {"_id": 0, "key_hash": 0},
+        ).sort("created_at", -1).to_list(100)
+
+    @router.post("/api-keys")
+    async def create_api_key(payload: ApiKeyCreatePayload, current: dict = Depends(require_spv)):
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(400, "Nama integrasi wajib diisi.")
+        raw_key = f"rs_live_{secrets.token_urlsafe(32)}"
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": current["user_id"],
+            "name": name,
+            "prefix": raw_key[:16],
+            "key_hash": hashlib.sha256(raw_key.encode("utf-8")).hexdigest(),
+            "created_at": datetime.now(timezone.utc),
+            "last_used_at": None,
+            "revoked_at": None,
+        }
+        await db.api_keys.insert_one(doc)
+        return {**{k: v for k, v in doc.items() if k not in ("_id", "key_hash")}, "key": raw_key}
+
+    @router.delete("/api-keys/{key_id}")
+    async def revoke_api_key(key_id: str, current: dict = Depends(require_spv)):
+        result = await db.api_keys.update_one(
+            {"id": key_id, "user_id": current["user_id"], "revoked_at": None},
+            {"$set": {"revoked_at": datetime.now(timezone.utc)}},
+        )
+        if not result.modified_count:
+            raise HTTPException(404, "API key tidak ditemukan atau sudah dicabut.")
+        return {"ok": True}
 
     # ---------- PROFILE (SELF-SERVICE) ----------
     @router.put("/profile")

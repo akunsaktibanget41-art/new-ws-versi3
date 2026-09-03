@@ -21,6 +21,9 @@ export const deleteUserAcc = (id) => api.delete(`/auth/users/${id}`).then((r) =>
 export const updateProfile = (p) => api.put("/auth/profile", p).then((r) => r.data);
 export const createUserAcc = (p) => api.post("/auth/users", p).then((r) => r.data);
 export const resetUserPassword = (id, new_password) => api.put(`/auth/users/${id}/password`, { new_password }).then((r) => r.data);
+export const listApiKeys = () => api.get("/auth/api-keys").then((r) => r.data);
+export const createApiKey = (name) => api.post("/auth/api-keys", { name }).then((r) => r.data);
+export const revokeApiKey = (id) => api.delete(`/auth/api-keys/${id}`).then((r) => r.data);
 
 // ============ SEARCH ============
 export const globalSearch = (q) => api.get("/search", { params: { q } }).then((r) => r.data);
